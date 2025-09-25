@@ -1,0 +1,202 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+## Setup:
+```{r}
+source('workflow/scripts/config.R')
+source('workflow/scripts/exploratory_data_analysis/load_PREVENT-AD_data.R')
+
+cogdrisk_social <- lifestyle_dataset_cogdrisk %>%
+  select(CONP_ID, starts_with("social_")) %>%
+  rename(activities = social_life_frequency_activities,
+         visitors = social_life_frequency_visitors,
+         visits = social_life_frequency_visits,
+         calls = social_life_frequency_phone_calls)
+```
+
+
+## Correlation statistics
+```{r}
+cor(cogdrisk_social[, c("activities", "visitors", "visits", "calls")], use="complete.obs", method="spearman")
+```
+
+
+## Barplots of social engagement questions
+```{r}
+df <- cogdrisk_social %>%
+  pivot_longer(
+    cols = activities:calls,
+    names_to = "question",
+    values_to = "answer"
+  )
+
+ggplot(df, aes(x = factor(answer))) +
+  geom_bar(fill = "steelblue") +
+  facet_wrap(
+    ~ question, 
+    scales="free_x",
+    labeller=labeller(question=c("activities" = "Social activity frequency",
+                                 "visitors" = "Home visitors",
+                                 "visits" = "Visiting friends",
+                                 "calls" = "Phone calls"))) +
+            
+  labs(
+    title = "PREVENT-AD Social Engagement Response Frequency by Question",
+    x = "Answer",
+    y = "Frequency"
+  ) +
+  scale_x_discrete()
+  
+```
+
+
+## Testing recoding strategies  
+### Recoding by aggregates of questions
+```{r}
+cogdrisk_social_recoded_1 <- cogdrisk_social %>%
+  mutate(
+    # V1: Average of all social engagement questions
+    social_engagement_v1 = rowMeans(select(., activities:calls)),
+    social_engagement_v1_binary = as.factor(if_else(
+      social_engagement_v1 > mean(cogdrisk_social_recoded$social_engagement_v1, na.rm=TRUE), 
+      0, 1)
+      ),
+    
+    # V2: Average of visit questions separately, then average across all questions
+    holder = rowMeans(select(., visitors:visits))) %>%
+  mutate(
+    social_engagement_v2 = rowMeans(subset(., select=c(activities, calls, holder))),
+    social_engagement_v2_binary = as.factor(if_else(
+      social_engagement_v2 > mean(cogdrisk_social_recoded$social_engagement_v2, na.rm=TRUE), 
+      0, 1)
+      )
+    ) 
+```
+
+
+### Recoding by question (weekly social engagement as threshold)
+```{r}
+# 0 = not lonely
+# 1 = lonely
+cogdrisk_social_recoded_2 <- cogdrisk_social %>%
+  mutate(
+    activities_binary = if_else(activities >= 5, 0, 1),
+    visitors_binary = if_else(visitors >= 4, 0, 1),
+    visits_binary = if_else(visits >= 4, 0, 1),
+    calls_binary = if_else(calls >= 4, 0, 1)
+  ) %>%
+  mutate(social_engagement = if_else(rowSums(select(., contains("_binary"))) >= 2, 1, 0))
+
+df <- cogdrisk_social_recoded_2 %>%
+  pivot_longer(
+    cols = activities_binary:calls_binary,
+    names_to = "question",
+    values_to = "answer"
+  )
+
+ggplot(df, aes(x = factor(answer))) +
+  geom_bar(fill = "steelblue") +
+  facet_wrap(
+    ~ question, 
+    scales="free_x",
+    labeller=labeller(question=c("activities_binary" = "Social activity frequency",
+                                 "visitors_binary" = "Home visitors",
+                                 "visits_binary" = "Visiting friends",
+                                 "calls_binary" = "Phone calls"))) +
+            
+  labs(
+    title = "PREVENT-AD Social Engagement Response Frequency by Question",
+    x = "Answer",
+    y = "Frequency"
+  ) +
+  scale_x_discrete()
+
+```
+
+## Visualizing distributions of recoded variable 
+### Version 1: Average of all social engagement questions
+```{r}
+mean_value_v1 = mean(cogdrisk_social_recoded_1$social_engagement_v1, na.rm=TRUE)
+#median_value_v1 = median(cogdrisk_social_recoded$social_engagement_v1, na.rm=TRUE)
+
+ggplot(cogdrisk_social_recoded_1, aes(x = social_engagement_v1)) +
+  geom_histogram(fill="steelblue", binwidth=0.25) +
+  geom_vline(xintercept = mean_value_v1,
+             linetype = "dashed",
+             color = "red") +
+  annotate("text",
+           x = mean_value_v1 - 0.1,
+           y = 15, 
+           label = paste("Mean = ", round(mean_value_v1, 2)),
+           color = "red",
+           angle = 90) +
+  labs(title = "Histogram of social_engagement_v1",
+       subtitle = "social_engagement_v1 = average of all social engagement questions",
+       x = "social_engagement_v1 score",
+       y = "Count")
+
+ggplot(cogdrisk_social_recoded_1, aes(x = social_engagement_v1_binary)) +
+  geom_bar(fill="steelblue") +
+  geom_text(stat = "count",
+            aes(label=..count..),
+            vjust = 2) +
+  labs(title = "Barplot of social_engagement_v1_binary",
+       subtitle = "Using mean of social_engagement_v1 as threshold score",
+       x = "Label",
+       y = "Count") %>%
+  scale_x_discrete(labels=c("0" = "Not lonely",
+                            "1" = "Lonely"))
+```
+
+### Version 2: Average of visit questions separately, then average across all questions
+```{r}
+mean_value_v2 = mean(cogdrisk_social_recoded_1$social_engagement_v2, na.rm=TRUE)
+mean_value_holder = mean(cogdrisk_social_recoded_1$holder, na.rm=TRUE)
+
+ggplot(cogdrisk_social_recoded_1, aes(x = holder)) +
+  geom_histogram(fill="steelblue", binwidth=0.5) +
+  geom_vline(xintercept = mean_value_holder,
+             linetype = "dashed",
+             color = "red") +
+  annotate("text",
+           x = mean_value_holder - 0.1,
+           y = 15, 
+           label = paste("Mean = ", round(mean_value_holder, 2)),
+           color = "red",
+           angle = 90) +
+  labs(title = "Histogram of average of visit questions",
+       #subtitle = "social_engagement_v2 = average of visit questions separately, then average across all questions",
+       x = "Average of visit questions",
+       y = "Count")
+
+ggplot(cogdrisk_social_recoded_1, aes(x = social_engagement_v2)) +
+  geom_histogram(fill="steelblue", binwidth=0.25) +
+  geom_vline(xintercept = mean_value_v2,
+             linetype = "dashed",
+             color = "red") +
+  annotate("text",
+           x = mean_value_v2 - 0.1,
+           y = 15, 
+           label = paste("Mean = ", round(mean_value_v2, 2)),
+           color = "red",
+           angle = 90) +
+  labs(title = "Histogram of social_engagement_v2",
+       subtitle = "social_engagement_v2 = average of visit questions separately, then average across all questions",
+       x = "social_engagement_v2 score",
+       y = "Count")
+
+ggplot(cogdrisk_social_recoded_1, aes(x = social_engagement_v2_binary)) +
+  geom_bar(fill="steelblue") +
+  geom_text(stat = "count",
+            aes(label=..count..),
+            vjust = 2) +
+  labs(title = "Barplot of social_engagement_v2_binary",
+       subtitle = "Using mean of social_engagement_v2 as threshold score",
+       x = "Label",
+       y = "Count") %>%
+  scale_x_discrete(labels=c("0" = "Not lonely",
+                            "1" = "Lonely"))
+```
+

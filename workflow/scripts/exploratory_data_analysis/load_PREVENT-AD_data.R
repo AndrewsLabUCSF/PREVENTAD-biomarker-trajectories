@@ -85,12 +85,6 @@ lifestyle_dataset <- demographics %>%
                slice(1)),
             by="CONP_ID")
 
-view1 <- lab %>%
-  filter(!is.na(total_cholesterol_value)) %>%
-  group_by(CONP_ID) %>%
-  #slice(1) %>%
-  select(CONP_ID, total_cholesterol_value)
-
 
 # RECODING ----------------------------------------------------------------
 
@@ -140,7 +134,12 @@ lifestyle_dataset_cogdrisk <- lifestyle_dataset %>%
                              smoking_present == 1 ~ 1,
                              smoking_present == 0 ~ 0,
                              TRUE ~ NA),
-         Cognitive_engagement = ntile(epoch_score_currently, 3)) 
+         Cognitive_engagement = ntile(epoch_score_currently, 3),
+         Social_engagement_holder = rowMeans(select(., social_life_frequency_activities:social_life_frequency_phone_calls)),
+         Social_engagement = as.factor(if_else(
+           Social_engagement_holder > mean(lifestyle_dataset_cogdrisk$Social_engagement_holder, na.rm=TRUE), 
+           0, 1))) %>%
+  select(-Social_engagement_holder)
   
 # Recoding exercise columns
 lifestyle_exercise_cogdrisk <- lifestyle_dataset_cogdrisk %>%
