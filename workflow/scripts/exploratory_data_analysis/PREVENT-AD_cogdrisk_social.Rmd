@@ -87,7 +87,7 @@ cogdrisk_social_recoded_2 <- cogdrisk_social %>%
     visits_binary = if_else(visits >= 4, 0, 1),
     calls_binary = if_else(calls >= 4, 0, 1)
   ) %>%
-  mutate(social_engagement = if_else(rowSums(select(., contains("_binary"))) >= 2, 1, 0))
+  mutate(social_engagement = as.factor(if_else(rowSums(select(., contains("_binary"))) >= 2, 1, 0)))
 
 df <- cogdrisk_social_recoded_2 %>%
   pivot_longer(
@@ -113,7 +113,69 @@ ggplot(df, aes(x = factor(answer))) +
   ) +
   scale_x_discrete()
 
+ggplot(cogdrisk_social_recoded_2, aes(x = social_engagement)) +
+  geom_bar(fill="steelblue") +
+  geom_text(stat = "count",
+            aes(label=..count..),
+            vjust = 2) +
+  labs(title = "Barplot of social_engagement",
+       subtitle = "Using weekly social engagement as threshold",
+       x = "Label",
+       y = "Count") %>%
+  scale_x_discrete(labels=c("0" = "Not lonely",
+                            "1" = "Lonely"))
 ```
+
+### Recoding by question (more than monthly social engagement as threshold)
+```{r}
+# 0 = not lonely
+# 1 = lonely
+cogdrisk_social_recoded_3 <- cogdrisk_social %>%
+  mutate(
+    activities_binary = if_else(activities >= 4, 0, 1),
+    visitors_binary = if_else(visitors >= 3, 0, 1),
+    visits_binary = if_else(visits >= 3, 0, 1),
+    calls_binary = if_else(calls >= 3, 0, 1)
+  ) %>%
+  mutate(social_engagement = as.factor(if_else(rowSums(select(., contains("_binary"))) >= 2, 1, 0)))
+
+df <- cogdrisk_social_recoded_3 %>%
+  pivot_longer(
+    cols = activities_binary:calls_binary,
+    names_to = "question",
+    values_to = "answer"
+  )
+
+ggplot(df, aes(x = factor(answer))) +
+  geom_bar(fill = "steelblue") +
+  facet_wrap(
+    ~ question, 
+    scales="free_x",
+    labeller=labeller(question=c("activities_binary" = "Social activity frequency",
+                                 "visitors_binary" = "Home visitors",
+                                 "visits_binary" = "Visiting friends",
+                                 "calls_binary" = "Phone calls"))) +
+            
+  labs(
+    title = "PREVENT-AD Social Engagement Response Frequency by Question",
+    x = "Answer",
+    y = "Frequency"
+  ) +
+  scale_x_discrete()
+
+ggplot(cogdrisk_social_recoded_3, aes(x = social_engagement)) +
+  geom_bar(fill="steelblue") +
+  geom_text(stat = "count",
+            aes(label=..count..),
+            vjust = 2) +
+  labs(title = "Barplot of social_engagement",
+       subtitle = "Using more than monthly social engagement as threshold",
+       x = "Label",
+       y = "Count") %>%
+  scale_x_discrete(labels=c("0" = "Not lonely",
+                            "1" = "Lonely"))
+```
+
 
 ## Visualizing distributions of recoded variable 
 ### Version 1: Average of all social engagement questions

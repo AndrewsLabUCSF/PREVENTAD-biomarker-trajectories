@@ -25,6 +25,9 @@ table1_gtsummary <- clinical_dataset_cogdrisk %>%
          Atrial_fibrillation = case_when(Atrial_fibrillation == 0 ~ "No",
                                          Atrial_fibrillation == 1 ~ "Yes",
                                          TRUE ~ NA) %>% factor(),
+         Diabetes = case_when(Diabetes == 0 ~ "No",
+                              Diabetes == 1 ~ "Yes",
+                              TRUE ~ NA) %>% factor(),
          TBI = case_when(TBI == 0 ~ "No",
                          TBI == 1 ~ "Yes",
                          TRUE ~ NA) %>% factor()) %>%
@@ -40,8 +43,7 @@ table1_gtsummary <- clinical_dataset_cogdrisk %>%
                  Education_level = "Education (level)",
                  BMI_category = "BMI (category)",
                  High_cholesterol = "High cholesterol",
-                 Atrial_fibrillation = "Atrial fibrillation",
-                 Diabetes_treatment = "Diabetes"),
+                 Atrial_fibrillation = "Atrial fibrillation"),
     statistic = list(all_continuous() ~ "{mean} ({sd})",
                      all_categorical() ~ "{n} ({p})")
   ) %>%
@@ -50,7 +52,7 @@ table1_gtsummary <- clinical_dataset_cogdrisk %>%
   bold_labels() %>%
   italicize_levels() %>%
   as_gt() %>%
-  tab_row_group(label = md("*Medical History*"), rows = 13:34) %>%
+  tab_row_group(label = md("*Medical History*"), rows = 13:31) %>%
   tab_row_group(label = md("**Demographics**"), rows = 1:12) %>%
   tab_style(
     style = list(cell_text(weight = "bold"), 
@@ -60,7 +62,7 @@ table1_gtsummary <- clinical_dataset_cogdrisk %>%
 # table1_gtsummary
 
 # Save table 1
-gtsave(table1_gtsummary, filename = file.path(DATA_PATHS$output$tables, "PREVENT-AD_table1.png"))
+gtsave(table1_gtsummary, filename = file.path(DATA_PATHS$output$tables, "PREVENT-AD_table1_v2.png"))
 
 
 # Split into demographics and medical history tables for slides
@@ -184,7 +186,7 @@ table2_gtsummary <- lifestyle_dataset_cogdrisk %>%
 # Save table 2
 gtsave(table2_gtsummary, filename = file.path(DATA_PATHS$output$tables, "PREVENT-AD_table2.png"))
 
-
+# Social engagement table
 table3_gtsummary <- lifestyle_dataset_cogdrisk %>% 
   left_join((clinical_dataset %>% 
                select(CONP_ID, Sex)),
@@ -285,5 +287,56 @@ table3_gtsummary <- lifestyle_dataset_cogdrisk %>%
 # Save table 3
 gtsave(table3_gtsummary, filename = file.path(DATA_PATHS$output$tables, "PREVENT-AD_table3.png"))
 
+
+# Updated recoded lifestyle table
+table4_gtsummary <- lifestyle_dataset_cogdrisk %>% 
+  left_join((clinical_dataset %>% 
+               select(CONP_ID, Sex)),
+            by="CONP_ID") %>%
+  select(-CONP_ID, -starts_with("social_life_")) %>%
+  mutate(Smoking = case_when(Smoking == 2 ~ "Current",
+                             Smoking == 1 ~ "Former",
+                             Smoking == 0 ~ "Never",
+                             TRUE ~ NA),
+         Cognitive_engagement = case_when(Cognitive_engagement == 3 ~ "Highest",
+                                          Cognitive_engagement == 2 ~ "Middle",
+                                          Cognitive_engagement == 1 ~ "Lowest",
+                                          TRUE ~ NA),
+         Social_engagement = if_else(Social_engagement == 0, "Not lonely", "Lonely")) %>%
+  tbl_summary(
+    by = Sex,
+    label = list(epoch_score_currently = "Epoch score (last year)",
+                 Cognitive_engagement = "Cognitive engagement",
+                 light_minutes_week = "Light",
+                 moderate_minutes_week = "Moderate",
+                 heavy_minutes_week = "Heavy",
+                 Social_engagement = "Social engagement"),
+    statistic = list(all_continuous() ~ "{mean} ({sd})",
+                     all_categorical() ~ "{n} ({p})")
+  ) %>%
+  modify_spanning_header(all_stat_cols() ~ "**Sex**") %>%
+  modify_footnote(all_stat_cols() ~ "Mean (SD) for continuous; n (%) for categorical") %>%
+  modify_footnote_body(
+    footnote = "Levels determined using tertiles of Epoch score",
+    columns = label,
+    rows = variable == "Cognitive_engagement" & row_type == "label"
+  ) %>%
+  bold_labels() %>%
+  italicize_levels() %>%
+  as_gt() %>%
+  tab_row_group(label = md("*Physical activity (mins per week)*"), rows = 13:15) %>%
+  tab_style(
+    style = list(cell_text(weight = "bold"), 
+                 cell_fill(color = "#f8f9fa")),
+    locations = cells_row_groups()
+  )
+# table4_gtsummary
+
+# Save table 4
+gtsave(table4_gtsummary, filename = file.path(DATA_PATHS$output$tables, "PREVENT-AD_table4.png"))
+
+
+
+# GENETIC AND BIOMARKER TABLES --------------------------------------------
 
 

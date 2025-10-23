@@ -1,0 +1,198 @@
+---
+title: "tables_PREVENT-AD"
+output: html_document
+---
+
+## Setup
+```{r}
+source('workflow/scripts/config.R')
+```
+
+## Demographics and clinical factors table stratified by clinical diagnosis
+```{r}
+table1_gtsummary <- clinical_dataset_cogdrisk %>% 
+  left_join(diagnosis, by="CONP_ID") %>%
+  mutate(Clinical_diagnosis = if_else(is.na(Clinical_diagnosis), "CN", Clinical_diagnosis)) %>%
+  left_join(apoe_dataset, by="CONP_ID") %>%
+  # Changing labels
+  mutate(Sex = case_when(Sex == 0 ~ "Female",
+                         Sex == 1 ~ "Male",
+                         TRUE ~ NA) %>% factor(),
+         Education_level = case_when(Education_level == "High" ~ "High (>11 years)",
+                                     Education_level == "Middle" ~ "Middle (8-11 years)",
+                                     Education_level == "Low" ~ "Low (<8 years)",
+                                     TRUE ~ NA) %>% factor(),
+         Hypertension = case_when(Hypertension == 0 ~ "No",
+                                  Hypertension == 1 ~ "Yes",
+                                  NA ~ NA) %>% factor(),
+         High_cholesterol = case_when(High_cholesterol == 0 ~ "<6.5 mmol/liter",
+                                      High_cholesterol == 1 ~ ">6.5 mmol/liter",
+                                      TRUE ~ NA) %>% factor(),
+         Depression = case_when(Depression == 0 ~ "No",
+                                Depression == 1 ~ "Yes",
+                                TRUE ~ NA) %>% factor(),
+         Atrial_fibrillation = case_when(Atrial_fibrillation == 0 ~ "No",
+                                         Atrial_fibrillation == 1 ~ "Yes",
+                                         TRUE ~ NA) %>% factor(),
+         Diabetes = case_when(Diabetes == 0 ~ "No",
+                              Diabetes == 1 ~ "Yes",
+                              TRUE ~ NA) %>% factor(),
+         TBI = case_when(TBI == 0 ~ "No",
+                         TBI == 1 ~ "Yes",
+                         TRUE ~ NA) %>% factor()) %>%
+  select(-CONP_ID) %>%
+  tbl_summary(
+    by = Clinical_diagnosis,
+    type = list(Hypertension ~ "categorical",
+                High_cholesterol ~ "categorical",
+                Depression ~ "categorical",
+                Atrial_fibrillation ~ "categorical",
+                TBI ~ "categorical"),
+    label = list(Education_years = "Education (years)",
+                 Education_level = "Education (level)",
+                 BMI_category = "BMI (category)",
+                 High_cholesterol = "High cholesterol",
+                 Atrial_fibrillation = "Atrial fibrillation"),
+    statistic = list(all_continuous() ~ "{mean} ({sd})",
+                     all_categorical() ~ "{n} ({p})")
+  ) %>%
+  modify_spanning_header(all_stat_cols() ~ "**Clinical diagnosis**") %>%
+  modify_footnote(all_stat_cols() ~ "Mean (SD) for continuous; n (%) for categorical") %>%
+  bold_labels() %>%
+  italicize_levels() %>%
+  as_gt() %>%
+  #tab_row_group(label = md("*Medical History*"), rows = 13:31) %>%
+  #tab_row_group(label = md("**Demographics**"), rows = 1:12) %>%
+  tab_style(
+    style = list(cell_text(weight = "bold"),
+                 cell_fill(color = "#f8f9fa")),
+    locations = cells_row_groups()
+  )
+table1_gtsummary
+
+gtsave(table1_gtsummary, filename = file.path(DATA_PATHS$output$tables, "PREVENT-AD_table1_v2.png"))
+```
+
+
+## Lifestyle table by clinical diagnosis
+```{r}
+table2_gtsummary <- lifestyle_dataset_cogdrisk %>% 
+  left_join(diagnosis, by="CONP_ID") %>%
+  mutate(Clinical_diagnosis = if_else(is.na(Clinical_diagnosis), "CN", Clinical_diagnosis)) %>%
+  select(-CONP_ID, -starts_with("social_life_")) %>%
+  mutate(Smoking = case_when(Smoking == 2 ~ "Current",
+                             Smoking == 1 ~ "Former",
+                             Smoking == 0 ~ "Never",
+                             TRUE ~ NA),
+         Cognitive_engagement = case_when(Cognitive_engagement == 3 ~ "Highest",
+                                          Cognitive_engagement == 2 ~ "Middle",
+                                          Cognitive_engagement == 1 ~ "Lowest",
+                                          TRUE ~ NA),
+         Social_engagement = if_else(Social_engagement == 0, "Not lonely", "Lonely")) %>%
+  tbl_summary(
+    by = Clinical_diagnosis,
+    label = list(epoch_score_currently = "Epoch score (last year)",
+                 Cognitive_engagement = "Cognitive engagement",
+                 light_minutes_week = "Light",
+                 moderate_minutes_week = "Moderate",
+                 heavy_minutes_week = "Heavy",
+                 Social_engagement = "Social engagement"),
+    statistic = list(all_continuous() ~ "{mean} ({sd})",
+                     all_categorical() ~ "{n} ({p})")
+  ) %>%
+  modify_spanning_header(all_stat_cols() ~ "**Clinical Diagnosis**") %>%
+  modify_footnote(all_stat_cols() ~ "Mean (SD) for continuous; n (%) for categorical") %>%
+  modify_footnote_body(
+    footnote = "Levels determined using tertiles of Epoch score",
+    columns = label,
+    rows = variable == "Cognitive_engagement" & row_type == "label"
+  ) %>%
+  bold_labels() %>%
+  italicize_levels() %>%
+  as_gt() %>%
+  tab_row_group(label = md("*Physical activity (mins per week)*"), rows = 13:15) %>%
+  tab_style(
+    style = list(cell_text(weight = "bold"), 
+                 cell_fill(color = "#f8f9fa")),
+    locations = cells_row_groups()
+  )
+table2_gtsummary
+
+gtsave(table2_gtsummary, filename = file.path(DATA_PATHS$output$tables, "PREVENT-AD_table2_v2.png"))
+```
+
+
+## Family history table by clinical diagnosis
+```{r}
+table3_gtsummary <- fhx_dataset %>%
+  left_join(diagnosis, by="CONP_ID") %>%
+  mutate(
+    father_dx_ad_dementia = as.factor(if_else(father_dx_ad_dementia == 0, "No", "Yes")),
+    mother_dx_ad_dementia = as.factor(if_else(mother_dx_ad_dementia == 0, "No", "Yes")),
+    sibling_dx_ad_dementia = as.factor(if_else(sibling_dx_ad_dementia == 0, "No", "Yes")),
+    Clinical_diagnosis = if_else(is.na(Clinical_diagnosis), "CN", Clinical_diagnosis)) %>%
+  select(-CONP_ID) %>%
+  tbl_summary(
+    by = Clinical_diagnosis,
+    type = list(all_dichotomous() ~ "categorical",
+                sibling_dx_ad_dementia_count ~ "continuous",
+                sibling_onset_age_1 ~ "continuous",
+                sibling_onset_age_2 ~ "continuous",
+                sibling_onset_age_3 ~ "continuous",
+                other_family_members_AD ~ "continuous",
+                other_maternal_family_members_AD ~ "continuous",
+                other_paternal_family_members_AD ~ "continuous"),
+    label = list(father_dx_ad_dementia = "Father affected with AD-like dementia",
+                 father_onset_age = "Age of father at AD-like dementia onset",
+                 mother_dx_ad_dementia = "Mother affected with AD-like dementia",
+                 mother_onset_age = "Age of mother at AD-like dementia onset",
+                 sibling_dx_ad_dementia = "Sibling(s) affected with AD-like dementia",
+                 sibling_dx_ad_dementia_count = "Number of siblings affected",
+                 sibling_onset_age_1 = "Age of sibling 1 at AD-like dementia onset",
+                 sibling_onset_age_2 = "Age of sibling 2 at AD-like dementia onset",
+                 sibling_onset_age_3 = "Age of sibling 3 at AD-like dementia onset",
+                 other_family_members_AD = "Total number of other family members affected with AD-like dementia",
+                 other_maternal_family_members_AD = "Maternal",
+                 other_paternal_family_members_AD = "Paternal"),
+    statistic = list(all_continuous() ~ "{mean} ({sd})",
+                     all_categorical() ~ "{n} ({p})")
+  ) %>%
+  add_n() %>%
+  remove_row_type(type = "missing") %>%
+  modify_spanning_header(all_stat_cols() ~ "**Clinical Diagnosis**") %>%
+  modify_column_indent(columns = label,
+                       rows = variable %in% c("father_onset_age", "mother_onset_age"),
+                       indent = 8) %>%
+  modify_column_indent(columns = label, 
+                       rows = variable %in% c("sibling_onset_age_1",
+                                              "sibling_onset_age_2",
+                                              "sibling_onset_age_3",
+                                              "other_maternal_family_members_AD",
+                                              "other_paternal_family_members_AD")) %>%
+  bold_labels() %>%
+  italicize_levels() %>%
+  remove_bold(columns = label, rows = variable %in% c("father_onset_age", 
+                                                      "mother_onset_age",
+                                                      "sibling_onset_age_1",
+                                                      "sibling_onset_age_2",
+                                                      "sibling_onset_age_3",
+                                                      "other_maternal_family_members_AD",
+                                                      "other_paternal_family_members_AD")) %>%
+  as_gt() %>%
+  tab_style(
+    style = list(cell_text(weight = "bold"), 
+                 cell_fill(color = "#f8f9fa")),
+    locations = cells_row_groups()
+  )
+table3_gtsummary
+```
+
+
+## Biomarker tables 
+```{r}
+
+```
+
+
+
+
