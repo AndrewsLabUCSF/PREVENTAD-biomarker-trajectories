@@ -4,20 +4,10 @@ source('workflow/scripts/config.R')
 
 # Helper functions --------------------------------------------------------
 
-## Helper function for safe scoring
-score_variable <- function(df, col_name, scoring_fun) {
-  if (!is.na(col_name) && col_name %in% names(df)) {
-    scoring_fun(df[[col_name]])
-  } else {
-    0
-  }
-}
-
 
 # CogDrisk ----------------------------------------------------------------
 ## Calculate CogDrisk score
 ##  Inputs:
-##    - df: dataframe (requires all factors to be recoded according to CogDrisk levels)
 
 calculate_cogdrisk <- function(df, 
                                age_var="Age",
@@ -29,6 +19,8 @@ calculate_cogdrisk <- function(df,
                                stroke_var="Stroke",
                                tbi_var="TBI",
                                hypertension_var="Hypertension",
+                               atrialfib_var="Atrial_fibrillation",
+                               insomnia_var="Insomnia",
                                depression_var="Depression",
                                physact_var="Physical_inactivity",
                                cogeng_var="Cognitive_engagement",
@@ -40,13 +32,13 @@ calculate_cogdrisk <- function(df,
   
   required_vars <- c(age_var, sex_var, educ_var, obesity_var, chol_var,
                      diabetes_var, stroke_var, tbi_var, hypertension_var,
-                     depression_var, physact_var, cogeng_var, soceng_var,
-                     diet_var, smoking_var)
+                     atrialfib_var, insomnia_var, depression_var, physact_var, 
+                     cogeng_var, soceng_var, diet_var, smoking_var)
   
   var_names <- c("Age", "Sex", "Education", "Obesity",
                  "High cholesterol", "Diabetes", "Stroke", "TBI", "Hypertension",
-                 "Depression", "Physical inactivity", "Cognitive engagement",
-                 "Social engagement", "Diet", "Smoking")
+                 "Atrial fibrillation", "Insomnia", "Depression", "Physical inactivity", 
+                 "Cognitive engagement", "Social engagement", "Diet", "Smoking")
   
   available_vars <- required_vars[required_vars %in% names(df)]
   missing_vars <- setdiff(required_vars, names(df))
@@ -174,6 +166,18 @@ calculate_cogdrisk <- function(df,
     components_missing <- c(components_missing, "hypertension")
   }
   
+  ## Atrial fibrillation
+  if (atrialfib_var %in% names(df)) {
+    atrialfib <- df[[atrialfib_var]]
+    atrialfib_points <- if_else(atrialfib == 0, 0, 1, missing=0)
+    points <- points + atrialfib_points
+    components_used <- c(components_used, "atrial fibrillation")
+  } else {
+    components_missing <- c(components_missing, "atrial fibrillation")
+  }
+  
+  ## Insomnia
+  
   ## Depression
   if (depression_var %in% names(df)) {
     depression <- df[[depression_var]]
@@ -240,9 +244,6 @@ calculate_cogdrisk <- function(df,
 
 }
 
-test <- data_cogdrisk %>% 
-  mutate(score = calculate_cogdrisk(data_cogdrisk)) %>%
-  relocate(score, .after=CONP_ID)
-
-
-ggplot 
+# test <- data_cogdrisk %>% 
+#   mutate(score = calculate_cogdrisk(data_cogdrisk)) %>%
+#   relocate(score, .after=CONP_ID)

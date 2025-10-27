@@ -3,7 +3,7 @@
 
 install.packages("pacman")
 
-pacman::p_load(tidyr, dplyr, ggplot2, gtsummary, gt, here, tidyverse)
+pacman::p_load(tidyr, dplyr, ggplot2, gtsummary, gt, here, tidyverse, data.table)
 
 DATA_PATHS <- list(
   output = list(

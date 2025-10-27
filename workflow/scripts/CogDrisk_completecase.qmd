@@ -1,0 +1,155 @@
+---
+title: "CRS_creation"
+format: html
+---
+
+## Setup
+```{r}
+source('workflow/scripts/config.R')
+source('workflow/scripts/data_wrangling/load_PREVENT-AD_data.R')
+source('workflow/scripts/functions/CRS.R')
+source('workflow/scripts/functions/CogDrisk_recode.R')
+```
+
+
+## Calculating CogDrisk score
+```{r}
+data_cogd <- prepare_preventad_cogdrisk(clinical_cogd_raw,
+                                        lifestyle_cogd_raw)
+
+data_cogd_scored <- data_cogd %>% 
+  select(-c(Education_years, BMI, LDL_value)) %>%
+  mutate(num_cogdrisk_vars = (rowSums(!is.na(.))) - 1) %>%
+  mutate(complete_scores = complete.cases(.)) %>%
+  mutate(score = calculate_cogdrisk(.)) %>%
+  relocate(score, .after=CONP_ID) %>%
+  relocate(complete_scores, .after=score) %>%
+  relocate(num_cogdrisk_vars, .after=complete_scores) 
+
+complete_cogd <- data_cogd_scored %>%
+  filter(complete_scores == TRUE)
+```
+
+### CogDrisk scores by number of factors used for calculation
+```{r}
+df <- data_cogd_scored %>%
+  select(CONP_ID, score, num_cogdrisk_vars, complete_scores) 
+
+ggplot(df, aes(x=num_cogdrisk_vars)) +
+  geom_bar(fill = "steelblue") +
+  scale_x_continuous(labels=df$num_cogdrisk_vars, breaks=df$num_cogdrisk_vars) +
+  geom_text(stat = "count",
+            aes(label=after_stat(count)),
+            vjust = -0.5)
+
+
+# table1_gtsummary <- df %>%
+#   tbl_summary(
+#     by=num_cogdrisk_vars,
+#     statistic = list(all_continuous() ~ "{mean} ({sd})",
+#                      all_categorical() ~ "{n} ({p})")
+#   )
+# table1_gtsummary
+
+completeness_summary <- df %>%
+   group_by(num_cogdrisk_vars) %>%
+   summarise(
+     percent_cases = (n() / nrow(df)) * 100,
+     min_score = min(score),
+     mean_score = mean(score),
+     max_score = max(score),
+     sd_score = sd(score)
+   )
+
+df1 <- df %>%
+  filter(num_cogdrisk_vars == 14)
+
+ggplot(df1, aes(x=score, y=as.factor(1))) +
+  geom_violin() 
+```
+
+
+### Scatterplots of CogDrisk vs BBM (at first visit)
+```{r}
+df2 <- complete_cogd %>%
+  left_join((ptau_dataset %>%
+               group_by(CONP_ID) %>%
+               slice(1)),
+            by="CONP_ID")
+  # left_join(ptau_dataset, by="CONP_ID")
+
+ggplot(complete_cogd, aes(x=score, y=ptau217_simoa_UGOT)) +
+  geom_point(shape=1) +
+  ggtitle("Scatterplot of CogDrisk score vs ptau217 (at first visit)") +
+  geom_smooth(method=lm)
+  # geom_density_2d(aes(fill=..density..),z geom="raster")
+
+ipms_bbm <- complete_cogd
+  left_join((ipms_dataset %>%
+              select(CONP_ID, Study_visit_label, ptau181_simoa_UGOT,
+                     GFAP_simoa_4plex, AB_ratio_simoa_4plex) %>%
+              group_by(CONP_ID) %>%
+              slice(1)),
+            by="CONP_ID")
+
+ggplot(ipms_bbm, aes(x=score, y=ptau181_simoa_UGOT)) +
+  geom_point(shape=1) +
+  ggtitle("Scatterplot of CogDrisk score vs ptau181 (at first visit)") +
+  geom_smooth(method="lm")
+
+ggplot(ipms_bbm, aes(x=score, y=GFAP_simoa_4plex)) +
+  geom_point(shape=1) +
+  ggtitle("Scatterplot of CogDrisk score vs GFAP (at first visit)") +
+  geom_smooth(method="lm")
+
+ggplot(ipms_bbm, aes(x=score, y=AB_ratio_simoa_4plex)) +
+  geom_point(shape=1) +
+  ggtitle("Scatterplot of CogDrisk score vs AB ratio (at first visit)") +
+  geom_smooth(method="lm")
+
+```
+
+## Missing data imputation
+```{r}
+library(missForest)
+
+colSums(is.na(data_cogd))
+
+data_cogd_imp <- clinical_cogd_raw %>%
+  select(CONP_ID, head_injury_hospitalized, head_injury_severe) %>%
+  left_join((lifestyle_cogd_raw %>%
+               select(CONP_ID, smoking_present, epoch_score_currently, starts_with("social_life"))),
+            by="CONP_ID") %>%
+  mutate(across(!epoch_score_currently, as.factor)) %>%
+  select(-CONP_ID)
+
+imp_mf <- missForest(data_cogd_imp, maxiter=10, ntree=100)
+
+data_cogd_imp <- cbind(imp_mf$ximp, CONP_ID=clinical_cogd_raw$CONP_ID) %>%
+  relocate(CONP_ID) %>%
+  mutate(across(!CONP_ID, as.numeric))
+
+# Update columns using imputed data
+clinical_imp <- data_cogd_imp %>% select(head_injury_hospitalized, head_injury_severe)
+lifestyle_imp <- data_cogd_imp %>% select(-head_injury_hospitalized, -head_injury_severe)
+
+clinical_cogd_imp <- clinical_cogd_raw
+clinical_cogd_imp[names(clinical_imp)] <- clinical_imp
+
+lifestyle_cogd_imp <- lifestyle_cogd_raw
+lifestyle_cogd_imp[names(lifestyle_imp)] <- lifestyle_imp
+
+data_cogd_imp_recoded <- prepare_preventad_cogdrisk(clinical_cogd_imp,
+                                                    lifestyle_cogd_imp)
+
+data_cogd_imp_scored <- data_cogd_imp_recoded %>% 
+  select(-c(Education_years, BMI, LDL_value)) %>%
+  mutate(num_cogdrisk_vars = (rowSums(!is.na(.))) - 1) %>%
+  mutate(complete_scores = complete.cases(.)) %>%
+  mutate(score = calculate_cogdrisk(.)) %>%
+  relocate(score, .after=CONP_ID) %>%
+  relocate(complete_scores, .after=score) %>%
+  relocate(num_cogdrisk_vars, .after=complete_scores) 
+
+colSums(is.na(data_cogd_imp_scored))
+```
