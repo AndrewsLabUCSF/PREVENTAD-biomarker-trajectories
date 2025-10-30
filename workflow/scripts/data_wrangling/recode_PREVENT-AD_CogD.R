@@ -1,15 +1,15 @@
 
 # SETUP -------------------------------------------------------------------
 
-# Load configuration file
-source('workflow/scripts/data_wrangling/load_PREVENT-AD_data.R')
+# Load files
+source('workflow/scripts/config.R')
+
+clinical_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_clinical_raw.rds"))
+lifestyle_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_lifestyle_raw.rds"))
 
 
 ## RECODING ---------------------------------------------------------------
-### CogDrisk
-
-
-clinical_cogd <- clinical_cogd_raw %>%
+clinical_cogd <- clinical_raw %>%
   mutate(
     Sex = if_else(Sex == "Female", 0, 1) %>% factor(), # female == 0, male == 1
     Age = Candidate_Age/12,
@@ -50,7 +50,7 @@ clinical_cogd <- clinical_cogd_raw %>%
             head_injury_hospitalized, head_injury_severe))
 
 
-lifestyle_cogd <- lifestyle_cogd_raw %>%
+lifestyle_cogd <- lifestyle_raw %>%
   # smoking: 2 == current, 1 == former, 0 == non smoker
   mutate(Smoking = case_when(smoking_present == 4 ~ 2,
                              smoking_present == 3 ~ 2,
@@ -66,21 +66,26 @@ lifestyle_cogd <- lifestyle_cogd_raw %>%
   select(-Social_engagement_holder)
 
 # Recoding exercise columns
-lifestyle_cogd <- lifestyle_cogd %>%
+lifestyle_exercise_cogd <- lifestyle_cogd %>%
   mutate(
     light_minutes_week = 0,
     moderate_minutes_week = 0,
     heavy_minutes_week = 0) %>%
   mutate(across(contains("_intensity"), ~ as.numeric(as.character(.))),
          across(contains("_days"), ~ as.numeric(as.character(.))),
-         across(contains("_hours"), ~ as.numeric(as.character(.))))
+         across(contains("_hours"), ~ as.numeric(as.character(.)))) %>%
+  rowwise() %>%
+  mutate(
+    has_any_exercise_data = any(!is.na(c_across(contains("exer_curr_act"))))
+  ) %>%
+  ungroup()
 
 for(i in 1:5) {  
   intensity_col <- paste0("exer_curr_act", i, "_intensity")
   days_col <- paste0("exer_curr_act", i, "_days")
   hours_col <- paste0("exer_curr_act", i, "_hours")
   
-  lifestyle_cogd <- lifestyle_cogd %>%
+  lifestyle_exercise_cogd <- lifestyle_exercise_cogd %>%
     mutate(
       # Only calculate if ALL three values for this activity are present
       activity_minutes = case_when(
@@ -101,16 +106,28 @@ for(i in 1:5) {
     select(-activity_minutes)
 }
 
-lifestyle_cogd <- lifestyle_cogd %>%
+lifestyle_exercise_cogd <- lifestyle_exercise_cogd %>%
+  mutate(
+    light_minutes_week = if_else(has_any_exercise_data, light_minutes_week, NA_real_),
+    moderate_minutes_week = if_else(has_any_exercise_data, moderate_minutes_week, NA_real_),
+    heavy_minutes_week = if_else(has_any_exercise_data, heavy_minutes_week, NA_real_)
+  ) %>%
+  select(-has_any_exercise_data)
+
+lifestyle_cogd <- lifestyle_exercise_cogd %>%
   relocate(Smoking, .after=smoking_present) %>%
   relocate(Cognitive_engagement, .after=epoch_score_currently) %>%
   relocate(light_minutes_week, .after=Cognitive_engagement) %>%
   relocate(moderate_minutes_week, .after=light_minutes_week) %>%
   relocate(heavy_minutes_week, .after=moderate_minutes_week) %>%
-  # Physical inactivity: 0 = physically inactive, 1 = physically active
+  # Physical inactivity: 0 = physically active, 1 = physically inactive
   mutate(Physical_inactivity = if_else((moderate_minutes_week + heavy_minutes_week) > 150, 0, 1)) %>%
   select(CONP_ID, Smoking, Cognitive_engagement, Social_engagement, Physical_inactivity)
 
 # Merge
-data_cogd <- clinical_cogd %>%
+dat_cogd <- clinical_cogd %>%
   left_join(lifestyle_cogd, by="CONP_ID")
+
+# Save
+saveRDS(dat_cogd, 
+        file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_cogd_dat.rds"))

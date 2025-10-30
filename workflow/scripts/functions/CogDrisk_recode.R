@@ -1,7 +1,4 @@
 
-source('workflow/scripts/config.R')
-
-
 # CogDrisk ----------------------------------------------------------------
 ## Recode dataframe according to CogDrisk values
 

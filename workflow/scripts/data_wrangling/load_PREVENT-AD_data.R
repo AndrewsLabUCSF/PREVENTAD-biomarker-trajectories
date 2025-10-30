@@ -5,7 +5,7 @@
 source('workflow/scripts/config.R')
 
 # Load datasets
-files <- list.files('data/PREVENT-AD', full.names=TRUE)
+files <- list.files('data/raw/PREVENT-AD', full.names=TRUE)
 
 PREVENTAD_dat <- c()
 for (file in files) {
@@ -18,11 +18,10 @@ names(PREVENTAD_dat) <- c("AD8", "bp_pulse_weight", "diagnosis", "demographics",
                           "plasma_ptau217", "questionnaire")
 
 
-# COGDRISK --------------------------------------------------------------
-## VARIABLE SELECTION ---------------------------------------------------
+# VARIABLE SELECTION ----------------------------------------------------
 
 # Clinical
-clinical_cogd_raw <- PREVENTAD_dat$demographics %>%
+clinical_raw <- PREVENTAD_dat$demographics %>%
   select(CONP_ID, Sex, Education_years, Height) %>%
   left_join((PREVENTAD_dat$bp_pulse_weight %>% 
                group_by(CONP_ID) %>%
@@ -66,9 +65,11 @@ clinical_cogd_raw <- PREVENTAD_dat$demographics %>%
 PREVENTAD_dat$family_history <- PREVENTAD_dat$demographics %>%
   select(CONP_ID, father_dx_ad_dementia:other_paternal_family_members_AD)
 
+fhx_raw <- PREVENTAD_dat$family_history
+
 
 # Lifestyle table
-lifestyle_cogd_raw <- PREVENTAD_dat$demographics %>%
+lifestyle_raw <- PREVENTAD_dat$demographics %>%
   select(CONP_ID) %>%
   left_join((PREVENTAD_dat$questionnaire %>%
                select(CONP_ID, smoking_present) %>%
@@ -97,41 +98,56 @@ lifestyle_cogd_raw <- PREVENTAD_dat$demographics %>%
             by="CONP_ID")
 
 
-# LIBRA -------------------------------------------------------------------
-
-libra_dataset <- clinical_cogd_raw %>%
-  select(CONP_ID, Systolic_blood_pressure, Diastolic_blood_pressure, total_cholesterol_value, 
-         LDL_value, Height, Weight, hba1c_value, treatment_diabetes, past_depression) %>%
-  left_join((lifestyle_cogd_raw %>%
-               select(CONP_ID, smoking_present)),
-            by="CONP_ID") %>%
-  
-# Recoding
+# Genetics
+genetics <- PREVENTAD_dat$genetics %>%
   mutate(
-    Hypertension = if_else(
-      Systolic_blood_pressure >= 140 | Diastolic_blood_pressure >= 90, 1, 0),
-    Hypercholesterolemia = if_else(
-      total_cholesterol_value >= 5.2 & LDL_value >= 4.2, 1, 0),
-    BMI = Weight/(Height/100)^2,
-    BMI_category = case_when(BMI < 18.5 ~ "Underweight",
-                             BMI > 18.5 & BMI < 25 ~ "Normal",
-                             BMI >= 25 & BMI < 30 ~ "Overweight",
-                             BMI >= 30 ~ "Obese",
-                             TRUE ~ NA) %>% factor(),
-    Diabetes = case_when(treatment_diabetes > 0 ~ 1,
-                         hba1c_value >= 0.065 ~ 1,
-                         TRUE ~ 0),
-    Depression = past_depression %>% factor(),
-    Smoking = if_else(smoking_present >= 3, 1, 0)
-    ) %>%
-  relocate(Hypertension, .after=Diastolic_blood_pressure) %>%
-  relocate(Hypercholesterolemia, .after=LDL_value) %>%
-  relocate(BMI, .after=Weight) %>%
-  relocate(BMI_category, .after=BMI) %>%
-  relocate(Diabetes, .after=BMI_category) %>%
-  relocate(Depression, .after=past_depression) %>%
-  relocate(Smoking, .after=smoking_present) %>%
-  select(-c(Systolic_blood_pressure, Diastolic_blood_pressure, total_cholesterol_value, 
-            LDL_value, Height, Weight, hba1c_value, treatment_diabetes,
-            past_depression, smoking_present))
+    # Clean up any spacing issues
+    apoe_genotype = str_replace_all(APOE, " ", ""),  # Remove spaces
+    
+    # Extract individual alleles
+    allele1 = as.numeric(str_extract(apoe_genotype, "^\\d")),  # First number
+    allele2 = as.numeric(str_extract(apoe_genotype, "\\d$")),  # Last number
+    
+    # Count ε4 alleles (primary variable for analysis)
+    apoe_e4_count = (allele1 == 4) + (allele2 == 4),
+    
+    # ε4 carrier status (binary)
+    apoe_e4_carrier = if_else(apoe_e4_count > 0, 1, 0),
+    
+    # ε4 carrier status (labeled factor for plots)
+    apoe_e4_status = factor(apoe_e4_count,
+                            levels = 0:2,
+                            labels = c("Non-carrier", "One ε4", "Two ε4")),
+    
+    # Count ε2 alleles (protective)
+    apoe_e2_count = (allele1 == 2) + (allele2 == 2),
+    
+    apoe_e3_count = (allele1 == 3) + (allele2 == 3),
+    
+    # Full genotype categories (for detailed analyses)
+    apoe_category = factor(apoe_genotype,
+                           levels = c("22", "23", "24", 
+                                      "32", "33", "34", 
+                                      "42", "43", "44"),
+                           labels = c("ε2/ε2", "ε2/ε3", "ε2/ε4", 
+                                      "ε3/ε2", "ε3/ε3", "ε3/ε4", 
+                                      "ε4/ε2", "ε4/ε3", "ε4/ε4"))
+  ) %>%
+  select(-c(apoe_genotype, allele1, allele2))
 
+apoe <- genetics %>%
+  select(CONP_ID, starts_with("apoe_"))
+
+# SAVING INTERMEDIATE DATASETS -----APOE# SAVING INTERMEDIATE DATASETS --------------------------------------------
+saveRDS(clinical_raw, 
+        file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_clinical_cogd_raw.rds"))
+saveRDS(lifestyle_raw, 
+        file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_lifestyle_cogd_raw.rds"))
+saveRDS(fhx_raw,
+         file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_fhx_raw.rds"))
+saveRDS(genetics,
+        file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_genetics.rds"))
+saveRDS(apoe,
+        file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_apoe.rds"))
+saveRDS(PREVENTAD_dat, 
+        file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_dat.rds"))

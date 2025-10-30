@@ -1,0 +1,45 @@
+---
+title: "PREVENT-AD Family History"
+format: html
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warnings = FALSE)
+knitr::opts_knit$set(root.dir = here::here())
+```
+
+```{r setting}
+library(ggpubr)
+library(missForest)
+
+source('workflow/scripts/config.R')
+source(CRS_FN)
+
+fhx_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_fhx_raw.rds"))
+lifestyle_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_lifestyle_raw.rds"))
+PREVENTAD_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_dat.rds"))
+```
+
+
+```{r}
+dat_fhx <- fhx_raw %>%
+  rowwise() %>%
+  mutate(family_members_AD = sum(father_dx_ad_dementia, 
+                          mother_dx_ad_dementia, 
+                          sibling_dx_ad_dementia_count, na.rm=TRUE),
+         other_family_members_AD = if_else(is.na(other_family_members_AD), 
+                                           0, 
+                                           other_family_members_AD),
+         other_maternal_family_members_AD = if_else(is.na(other_maternal_family_members_AD), 
+                                                    0, 
+                                                    other_maternal_family_members_AD),
+         other_paternal_family_members_AD = if_else(is.na(other_paternal_family_members_AD), 
+                                                    0, 
+                                                    other_paternal_family_members_AD)) %>%
+  relocate(family_members_AD, .after=CONP_ID) %>%
+  relocate(other_family_members_AD, .after=family_members_AD) %>%
+  relocate(other_maternal_family_members_AD, .after=other_family_members_AD) %>%
+  relocate(other_paternal_family_members_AD, .after=other_maternal_family_members_AD)
+
+saveRDS(dat_fhx, file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_fhx_dat.rds"))
+```

@@ -1,19 +1,26 @@
 ---
-title: "tables_PREVENT-AD"
+title: "PREVENT-AD Cohort Summary"
 output: html_document
 ---
 
-## Setup
-```{r}
-source('workflow/scripts/config.R')
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warnings = FALSE)
+knitr::opts_knit$set(root.dir = here::here())
 ```
 
-## Demographics and clinical factors table stratified by clinical diagnosis
+```{r setting}
+source('workflow/scripts/config.R')
+source('workflow/scripts/data_wrangling/recode_PREVENT-AD.R')
+```
+
+# Demographics and clinical factors stratified by clinical diagnosis
 ```{r}
-table1_gtsummary <- clinical_dataset_cogdrisk %>% 
-  left_join(diagnosis, by="CONP_ID") %>%
+table1_gtsummary <- clinical_cogd %>% 
+  left_join((PREVENTAD_dat$diagnosis) %>%
+              select(CONP_ID, Clinical_diagnosis), by="CONP_ID") %>%
   mutate(Clinical_diagnosis = if_else(is.na(Clinical_diagnosis), "CN", Clinical_diagnosis)) %>%
-  left_join(apoe_dataset, by="CONP_ID") %>%
+  left_join((PREVENTAD_dat$genetics %>%
+               select(CONP_ID, APOE)), by="CONP_ID") %>%
   # Changing labels
   mutate(Sex = case_when(Sex == 0 ~ "Female",
                          Sex == 1 ~ "Male",
@@ -70,14 +77,15 @@ table1_gtsummary <- clinical_dataset_cogdrisk %>%
   )
 table1_gtsummary
 
-gtsave(table1_gtsummary, filename = file.path(DATA_PATHS$output$tables, "PREVENT-AD_table1_v2.png"))
+#gtsave(table1_gtsummary, filename = file.path(EDA_OUTPUT_PATH$tables, "PREVENT-AD_table1_v2.png"))
 ```
 
 
-## Lifestyle table by clinical diagnosis
+## Lifestyle factors by clinical diagnosis
 ```{r}
-table2_gtsummary <- lifestyle_dataset_cogdrisk %>% 
-  left_join(diagnosis, by="CONP_ID") %>%
+table2_gtsummary <- lifestyle_cogd %>% 
+  left_join((PREVENTAD_dat$diagnosis) %>%
+              select(CONP_ID, Clinical_diagnosis), by="CONP_ID") %>%
   mutate(Clinical_diagnosis = if_else(is.na(Clinical_diagnosis), "CN", Clinical_diagnosis)) %>%
   select(-CONP_ID, -starts_with("social_life_")) %>%
   mutate(Smoking = case_when(Smoking == 2 ~ "Current",
@@ -88,14 +96,15 @@ table2_gtsummary <- lifestyle_dataset_cogdrisk %>%
                                           Cognitive_engagement == 2 ~ "Middle",
                                           Cognitive_engagement == 1 ~ "Lowest",
                                           TRUE ~ NA),
+         Physical_inactivity = if_else(Physical_inactivity == 0, 
+                                       "Inactive", 
+                                       "Physically active (>150 min/week of moderate-vigorous activity)"),
          Social_engagement = if_else(Social_engagement == 0, "Not lonely", "Lonely")) %>%
   tbl_summary(
     by = Clinical_diagnosis,
     label = list(epoch_score_currently = "Epoch score (last year)",
                  Cognitive_engagement = "Cognitive engagement",
-                 light_minutes_week = "Light",
-                 moderate_minutes_week = "Moderate",
-                 heavy_minutes_week = "Heavy",
+                 Physical_inactivity = "Physical inactivity",
                  Social_engagement = "Social engagement"),
     statistic = list(all_continuous() ~ "{mean} ({sd})",
                      all_categorical() ~ "{n} ({p})")
@@ -110,7 +119,6 @@ table2_gtsummary <- lifestyle_dataset_cogdrisk %>%
   bold_labels() %>%
   italicize_levels() %>%
   as_gt() %>%
-  tab_row_group(label = md("*Physical activity (mins per week)*"), rows = 13:15) %>%
   tab_style(
     style = list(cell_text(weight = "bold"), 
                  cell_fill(color = "#f8f9fa")),
@@ -118,14 +126,15 @@ table2_gtsummary <- lifestyle_dataset_cogdrisk %>%
   )
 table2_gtsummary
 
-gtsave(table2_gtsummary, filename = file.path(DATA_PATHS$output$tables, "PREVENT-AD_table2_v2.png"))
+#gtsave(table2_gtsummary, filename = file.path(EDA_OUTPUT_PATH$tables, "PREVENT-AD_table2_v3.png"))
 ```
 
 
 ## Family history table by clinical diagnosis
 ```{r}
-table3_gtsummary <- fhx_dataset %>%
-  left_join(diagnosis, by="CONP_ID") %>%
+table3_gtsummary <- PREVENTAD_dat$family_history %>%
+  left_join((PREVENTAD_dat$diagnosis) %>%
+              select(CONP_ID, Clinical_diagnosis), by="CONP_ID") %>%
   mutate(
     father_dx_ad_dementia = as.factor(if_else(father_dx_ad_dementia == 0, "No", "Yes")),
     mother_dx_ad_dementia = as.factor(if_else(mother_dx_ad_dementia == 0, "No", "Yes")),
@@ -185,6 +194,8 @@ table3_gtsummary <- fhx_dataset %>%
     locations = cells_row_groups()
   )
 table3_gtsummary
+
+gtsave(table3_gtsummary, filename = file.path(EDA_OUTPUT_PATH$tables, "PREVENT-AD_fhx.png"))
 ```
 
 
