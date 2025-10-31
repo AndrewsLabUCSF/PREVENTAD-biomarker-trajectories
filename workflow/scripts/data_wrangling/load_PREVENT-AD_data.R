@@ -19,7 +19,6 @@ names(PREVENTAD_dat) <- c("AD8", "bp_pulse_weight", "diagnosis", "demographics",
 
 
 # VARIABLE SELECTION ----------------------------------------------------
-
 # Clinical
 clinical_raw <- PREVENTAD_dat$demographics %>%
   select(CONP_ID, Sex, Education_years, Height) %>%
@@ -124,21 +123,21 @@ genetics <- PREVENTAD_dat$genetics %>%
     
     apoe_e3_count = (allele1 == 3) + (allele2 == 3),
     
-    # Full genotype categories (for detailed analyses)
-    apoe_category = factor(apoe_genotype,
-                           levels = c("22", "23", "24", 
-                                      "32", "33", "34", 
-                                      "42", "43", "44"),
-                           labels = c("ε2/ε2", "ε2/ε3", "ε2/ε4", 
-                                      "ε3/ε2", "ε3/ε3", "ε3/ε4", 
-                                      "ε4/ε2", "ε4/ε3", "ε4/ε4"))
+    # APOE category
+    apoe_category = case_when(
+      apoe_genotype == "32" ~ "e2+",
+      apoe_genotype == "33" ~ "e3/e3",
+      apoe_genotype %in% c("42", "43", "44") ~ "e4+",
+      TRUE ~ NA
+      )
   ) %>%
-  select(-c(apoe_genotype, allele1, allele2))
+  select(-c(allele1, allele2))
 
 apoe <- genetics %>%
   select(CONP_ID, starts_with("apoe_"))
 
-# SAVING INTERMEDIATE DATASETS -----APOE# SAVING INTERMEDIATE DATASETS --------------------------------------------
+
+# Save intermediate datasets
 saveRDS(clinical_raw, 
         file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_clinical_cogd_raw.rds"))
 saveRDS(lifestyle_raw, 

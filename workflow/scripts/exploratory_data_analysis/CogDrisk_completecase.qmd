@@ -16,30 +16,24 @@ source('workflow/scripts/config.R')
 source(CRS_FN)
 source(COGD_RECODE_FN)
 
-clinical_cogd_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_clinical_cogd_raw.rds"))
-lifestyle_cogd_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_lifestyle_cogd_raw.rds"))
-data_cogd <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_cogd_dat.rds"))
+clinical_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_clinical_raw.rds"))
+lifestyle_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_lifestyle_raw.rds"))
+
+dat_cogd_scored <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_cogd_scored.rds"))
+dat_cogd_imp_scored <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_cogd_imp_scored.rds"))
+dat_cogd_exer_imp_scored <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_cogd_exercise1_imp_scored.rds"))
 ```
 
 
-## Calculating CogDrisk score
+## Complete CogDrisk scores
 ```{r}
-data_cogd_scored <- data_cogd %>% 
-  select(-c(Education_years, BMI, LDL_value)) %>%
-  mutate(num_cogdrisk_vars = (rowSums(!is.na(.))) - 1) %>%
-  mutate(complete_scores = complete.cases(.)) %>%
-  mutate(score = calculate_cogdrisk(.)) %>%
-  relocate(score, .after=CONP_ID) %>%
-  relocate(complete_scores, .after=score) %>%
-  relocate(num_cogdrisk_vars, .after=complete_scores) 
-
-complete_cogd <- data_cogd_scored %>%
+complete_cogd <- dat_cogd_scored %>%
   filter(complete_scores == TRUE)
 ```
 
-### CogDrisk scores by number of factors used for calculation
+## CogDrisk scores by number of factors used for calculation
 ```{r}
-df <- data_cogd_scored %>%
+df <- dat_cogd_scored %>%
   select(CONP_ID, score, num_cogdrisk_vars, complete_scores) 
 
 ggplot(df, aes(x=num_cogdrisk_vars)) +
@@ -48,15 +42,6 @@ ggplot(df, aes(x=num_cogdrisk_vars)) +
   geom_text(stat = "count",
             aes(label=after_stat(count)),
             vjust = -0.5)
-
-
-# table1_gtsummary <- df %>%
-#   tbl_summary(
-#     by=num_cogdrisk_vars,
-#     statistic = list(all_continuous() ~ "{mean} ({sd})",
-#                      all_categorical() ~ "{n} ({p})")
-#   )
-# table1_gtsummary
 
 completeness_summary <- df %>%
    group_by(num_cogdrisk_vars) %>%
@@ -74,166 +59,53 @@ ggplot(complete_cogd, aes(x=score, y=as.factor(1))) +
 ```
 
 
-## Missing data imputation
+## Comparing missing data imputation techniques
 ```{r}
-colSums(is.na(data_cogd))
-
-data_cogd_imp <- clinical_raw %>%
-  select(CONP_ID, head_injury_hospitalized, head_injury_severe) %>%
-  left_join((lifestyle_raw %>%
-               select(CONP_ID, smoking_present, epoch_score_currently, starts_with("social_life"))),
+# Dataframe of all scores
+df2 <- complete_cogd %>%
+  select(CONP_ID, complete_score=score) %>%
+  # Imputing all data
+  left_join((dat_cogd_imp_scored %>%
+               select(CONP_ID, imp_all_score=score)),
             by="CONP_ID") %>%
-  mutate(CONP_ID = as.factor(CONP_ID),
-         head_injury_hospitalized = factor(head_injury_hospitalized, levels=c(0, 1)),
-         head_injury_severe = factor(head_injury_severe, levels=c(0, 1)),
-         smoking_present = factor(smoking_present, levels=0:4),
-         social_life_frequency_activities = factor(social_life_frequency_activities, levels=1:7),
-         social_life_frequency_visitors = factor(social_life_frequency_visitors, levels=1:5),
-         social_life_frequency_visits = factor(social_life_frequency_visits, levels=1:6),
-         social_life_frequency_phone_calls = factor(social_life_frequency_phone_calls, levels=1:6)
-         ) %>%
-  #mutate(across(!epoch_score_currently, as.factor)) %>%
-  select(-CONP_ID)
-
-
-imp_mf <- missForest(data_cogd_imp, verbose=TRUE, maxiter=10, ntree=100)
-
-data_cogd_imp_mf <- cbind(imp_mf$ximp, CONP_ID=clinical_raw$CONP_ID) %>%
-  relocate(CONP_ID) %>%
-  mutate(across(!CONP_ID, as.numeric)) %>%
-  mutate(head_injury_hospitalized = head_injury_hospitalized - 1,
-         head_injury_severe = head_injury_severe - 1,
-         smoking_present = smoking_present - 1)
-
-# Update columns using imputed data
-clinical_imp <- data_cogd_imp_mf %>% select(head_injury_hospitalized, head_injury_severe)
-lifestyle_imp <- data_cogd_imp_mf %>% select(-head_injury_hospitalized, -head_injury_severe)
-
-clinical_cogd_imp <- clinical_raw
-clinical_cogd_imp[names(clinical_imp)] <- clinical_imp
-
-lifestyle_cogd_imp <- lifestyle_raw
-lifestyle_cogd_imp[names(lifestyle_imp)] <- lifestyle_imp
-
-data_cogd_imp_recoded <- prepare_preventad_cogdrisk(clinical_cogd_imp,
-                                                    lifestyle_cogd_imp)
-
-data_cogd_imp_scored <- data_cogd_imp_recoded %>% 
-  select(-c(Education_years, BMI, LDL_value)) %>%
-  mutate(num_cogdrisk_vars = (rowSums(!is.na(.))) - 1) %>%
-  mutate(complete_scores = complete.cases(.)) %>%
-  mutate(score = calculate_cogdrisk(.)) %>%
-  relocate(score, .after=CONP_ID) %>%
-  relocate(complete_scores, .after=score) %>%
-  relocate(num_cogdrisk_vars, .after=complete_scores) 
-```
-
-### Testing imputing all missing data
-```{r}
-clinical_vars_to_imp <- names(clinical_raw)[sapply(clinical_raw, anyNA)]
-lifestyle_vars_to_imp <- names(lifestyle_raw)[sapply(lifestyle_raw, anyNA)]
-
-clinical_imp <- clinical_raw %>%
-  select(all_of(clinical_vars_to_imp)) %>%
-  mutate_at(c("head_injury_hospitalized", "head_injury_severe"), as.factor)
-lifestyle_imp <- lifestyle_raw %>%
-  select(all_of(lifestyle_vars_to_imp)) %>%
-  #mutate(id = row_number()) %>%
-  mutate(exer_curr_act2_days = as.numeric(exer_curr_act2_days)) %>%
-  mutate(smoking_present = as.factor(smoking_present)) %>%
-  mutate(across(ends_with("_intensity"), as.factor)) %>%
-  mutate(across(starts_with("social_"), as.factor)) 
-
-clinical_imp_mf <- missForest(clinical_imp, verbose=TRUE, maxiter=10, ntree=100)
-clinical_imp_mf_dat <- cbind(clinical_imp_mf$ximp, CONP_ID=clinical_raw$CONP_ID) %>%
-  relocate(CONP_ID) 
-lifestyle_imp_mf <- missForest(lifestyle_imp, verbose=TRUE, maxiter=10, ntree=100)
-lifestyle_imp_mf_dat <- cbind(lifestyle_imp_mf$ximp, CONP_ID=lifestyle_raw$CONP_ID) %>%
-  relocate(CONP_ID) %>%
-  mutate(across(starts_with("social_"), as.numeric))
-
-clinical_imp_raw <- clinical_raw
-clinical_imp_raw[names(clinical_imp_mf_dat)] <- clinical_imp_mf_dat
-lifestyle_imp_raw <- lifestyle_raw
-lifestyle_imp_raw[names(lifestyle_imp_mf_dat)] <- lifestyle_imp_mf_dat
-
-cogd_dat_imp <- prepare_preventad_cogdrisk(clinical_imp_raw,
-                                           lifestyle_imp_raw)
-saveRDS(cogd_dat_imp, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_cogd_imp_raw.rds"))
-saveRDS(clinical_imp_raw, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_clinical_imp_raw.rds"))
-saveRDS(lifestyle_imp_raw, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_lifestyle_imp_raw.rds"))
-
-cogd_dat_imp_scored <- cogd_dat_imp %>% 
-  select(-c(Education_years, BMI, LDL_value)) %>%
-  mutate(num_cogdrisk_vars = (rowSums(!is.na(.))) - 1) %>%
-  mutate(complete_scores = complete.cases(.)) %>%
-  mutate(score = calculate_cogdrisk(.)) %>%
-  relocate(score, .after=CONP_ID) %>%
-  relocate(complete_scores, .after=score) %>%
-  relocate(num_cogdrisk_vars, .after=complete_scores) %>%
-  select(-complete_scores, -num_cogdrisk_vars)
-
-saveRDS(cogd_dat_imp_scored, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_cogd_imp_scored.rds"))
-```
-
-
-### Plots of complete cases vs imputed data
-```{r}
-df2 <- data_cogd_scored %>%
-  select(CONP_ID, score) %>%
-  # left_join((complete_cogd %>%
-  #              select(CONP_ID, complete_score=score)),
-  #           by="CONP_ID") %>%
-  left_join((data_cogd_imp_scored %>%
-               select(CONP_ID, imp_score=score)),
-            by="CONP_ID") %>%
-  left_join((cogd_dat_imp_scored %>%
-              select(CONP_ID, imp_all_score=score)),
+  # Imputing all lifestyle vars and first exercise activities
+  left_join((dat_cogd_exer_imp_scored %>%
+              select(CONP_ID, imp_exer_score=score)),
             by="CONP_ID")
-  
+
+# Pivot longer for ggplot  
 df2_longer <- df2 %>%
   pivot_longer(
-    cols = c(score, imp_score, imp_all_score),
+    cols = c(complete_score, imp_all_score, imp_exer_score),
     names_to = "method",
     values_to = "score_value"
   ) %>%
   mutate(method = recode(method,
-                         "score" = "original",
                          "complete_score" = "original (complete cases)",
-                         "imp_score" = "imputed",
-                         "imp_all_score" = "imputed (all data)"))
+                         "imp_all_score" = "imputed (all data)",
+                         "imp_exer_score" = "imputed (exer_act1)"))
 
-var_ratio1 <- sd(df2$imp_score) / sd(df2$score, na.rm = TRUE)
-var_ratio2 <- sd(df2$imp_all_score) / sd(df2$score, na.rm = TRUE)
-wilcox.test(df2$score, df2$imp_score)
-wilcox.test(df2$score, df2$imp_all_score)
+# SD ratio and Wilcox tests
+var_ratio1 <- sd(df2$imp_all_score) / sd(df2$complete_score, na.rm = TRUE)
+var_ratio2 <- sd(df2$imp_exer_score) / sd(df2$complete_score, na.rm = TRUE)
+wilcox.test(df2$complete_score, df2$imp_all_score)
+wilcox.test(df2$complete_score, df2$imp_exer_score)
 
 plot1 <- ggplot(df2_longer, aes(x=method, y=score_value, fill=method)) +
   geom_violin(alpha=0.7) +
   geom_boxplot(width=0.1, fill="white") +
-  # stat_compare_means(
-  #   method="wilcox.test",
-  #   label.x=1.5#,
-  #   #label="p.format"
-  # ) +
-  # annotate(
-  #   "text",
-  #   x=1.5,
-  #   y=15,
-  #   label=paste0("SD ratio (imputed vs cogd) = ", round(var_ratio1, 5)),
-  #   size=4
-  # ) +
-  # annotate(
-  #   "text",
-  #   x=1.5,
-  #   y=15,
-  #   label=paste0("SD ratio (imputed (all) vs cogd) = ", round(var_ratio2, 5)),
-  #   size=4
-  # ) +
-  ggtitle("Plot of original CogDrisk (complete cases only) and imputed CogDrisk")
+  stat_compare_means(
+    comparisons = list(c("imputed (all data)", "original (complete cases)"),
+                       c("imputed (exer_act1)", "original (complete cases)")),
+    method="wilcox.test",
+    label.x=1.5
+  ) +
+  labs(subtitle=paste0("SD ratio (imputed (all) vs cogd) = ", round(var_ratio1, 3), 
+                       "; SD ratio (imputed (exer_act1) vs cogd) = ", round(var_ratio2, 3))) +
+  ggtitle("Comparing imputation techniques for CogDrisk against original complete cases")
 
 plot1
-#ggsave(plot1, filename = file.path(EDA_OUTPUT_PATH$figures, "CogD_completecase_imputed.png"))
+# ggsave(plot1, filename = file.path(EDA_OUTPUT_PATH$figures, "CogD_imputation_comparison.png"))
 ```
 
 
