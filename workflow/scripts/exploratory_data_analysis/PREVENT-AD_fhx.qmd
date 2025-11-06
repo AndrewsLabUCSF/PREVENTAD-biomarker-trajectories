@@ -18,15 +18,18 @@ source(CRS_FN)
 fhx_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_fhx_raw.rds"))
 lifestyle_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_lifestyle_raw.rds"))
 PREVENTAD_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_dat.rds"))
+
+ptau217_dat <- PREVENTAD_dat$plasma_ptau217
+ipms_dat <- PREVENTAD_dat$plasma_4plex
 ```
 
-
+# Coding extensive family history variable
 ```{r}
 dat_fhx <- fhx_raw %>%
   rowwise() %>%
-  mutate(family_members_AD = sum(father_dx_ad_dementia, 
-                          mother_dx_ad_dementia, 
-                          sibling_dx_ad_dementia_count, na.rm=TRUE),
+  mutate(FDR_AD = sum(father_dx_ad_dementia, 
+                                 mother_dx_ad_dementia, 
+                                 sibling_dx_ad_dementia_count, na.rm=TRUE),
          other_family_members_AD = if_else(is.na(other_family_members_AD), 
                                            0, 
                                            other_family_members_AD),
@@ -35,11 +38,115 @@ dat_fhx <- fhx_raw %>%
                                                     other_maternal_family_members_AD),
          other_paternal_family_members_AD = if_else(is.na(other_paternal_family_members_AD), 
                                                     0, 
-                                                    other_paternal_family_members_AD)) %>%
-  relocate(family_members_AD, .after=CONP_ID) %>%
-  relocate(other_family_members_AD, .after=family_members_AD) %>%
+                                                    other_paternal_family_members_AD),
+         # binary: extensive fhx AD == 1; no extensive fhx AD == 0
+         ext_relatives_AD = if_else(other_family_members_AD > 0, 1, 0),
+         
+         # earliest age of onset
+         min_family_onset = pmin(
+           father_onset_age,
+           mother_onset_age,
+           sibling_onset_age_1,  
+           sibling_onset_age_2,
+           sibling_onset_age_3,
+           na.rm = TRUE
+           ),
+         
+         # single comprehensive fhx variable
+         fhx_burden = case_when(
+           # 3 = high
+           FDR_AD >= 3 ~ 3,
+           FDR_AD >= 2 & !is.na(min_family_onset) & min_family_onset < 65 ~ 3,
+           !is.na(min_family_onset) & min_family_onset < 60 ~ 3,
+           
+           # 2 = moderate
+           FDR_AD >= 2 ~ 2,
+           !is.na(min_family_onset) & min_family_onset >= 60 & min_family_onset < 65 ~ 2,
+           
+           # 1 = low
+           FDR_AD == 1 ~ 1
+           ) %>% as.factor()
+         ) %>%
+  relocate(FDR_AD, .after=CONP_ID) %>%
+  relocate(other_family_members_AD, .after=FDR_AD) %>%
   relocate(other_maternal_family_members_AD, .after=other_family_members_AD) %>%
-  relocate(other_paternal_family_members_AD, .after=other_maternal_family_members_AD)
+  relocate(other_paternal_family_members_AD, .after=other_maternal_family_members_AD) %>%
+  relocate(ext_relatives_AD, .after=FDR_AD) %>%
+  relocate(min_family_onset, .after=ext_relatives_AD) %>%
+  relocate(fhx_burden, .after=min_family_onset)
 
 saveRDS(dat_fhx, file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_fhx_dat.rds"))
+```
+
+
+# Checking association of family history variable and biomarker levels
+## ptau217
+```{r}
+df1 <- dat_fhx %>%
+  left_join((ptau217_dat %>%
+               group_by(CONP_ID) %>%
+               slice(1)),
+            by="CONP_ID") %>%
+  mutate(fhx_burden = as.numeric(fhx_burden))
+  # mutate(fhx_burden = factor(fhx_burden, 
+  #                            levels=c(1, 2, 3),
+  #                            labels=c("Low", "Moderate", "High")))
+
+# df1_longer <- df1 %>%
+#   pivot_longer(
+#     cols=extensive_family_members_AD,
+#     names_to="num_extensive_family_members_AD",
+#     values_to="yesno"
+#   ) %>%
+#   mutate(yesno = as.factor(yesno))
+
+ggplot(df1, aes(x=fhx_burden, y=ptau217_simoa_UGOT, fill=fhx_burden)) +
+  geom_violin(alpha=0.7) +
+  geom_boxplot(width=0.1, fill="white") +
+  stat_compare_means(
+    comparisons = list(c("Low", "Moderate"),
+                       c("Moderate", "High"),
+                       c("Low", "High")),
+    method="wilcox.test",
+    label.x=1.5
+  )
+
+lm1 <- lm(ptau217_simoa_UGOT ~ fhx_burden, data=df1)
+summary(lm1)
+
+cor.test(df1$other_family_members_AD, df1$ptau217_simoa_UGOT)
+```
+
+
+## Other biomarkers
+```{r}
+df2 <- dat_fhx %>%
+  left_join((ipms_dat %>%
+               group_by(CONP_ID) %>%
+               slice(1)),
+            by="CONP_ID") %>%
+  mutate(fhx_burden = as.numeric(fhx_burden))
+
+df2_longer <- df2 %>%
+  pivot_longer(
+    cols=c(ptau181_simoa_UGOT, AB_ratio_simoa_4plex, NFL_simoa_4plex,
+           GFAP_simoa_4plex),
+    names_to="biomarker",
+    values_to="value"
+  ) 
+  # mutate(fhx_burden = factor(fhx_burden, 
+  #                            levels=c(1, 2, 3),
+  #                            labels=c("Low", "Moderate", "High")))
+
+ggplot(df2_longer, aes(x=fhx_burden, y=value, fill=fhx_burden)) +
+  geom_violin(alpha=0.7) +
+  geom_boxplot(width=0.1, fill="white") +
+  facet_wrap(~biomarker, scales="free") +
+  ggtitle("Extensive family history of AD vs biomarker levels (at first visit)")
+
+lm2 <- lm(AB_ratio_simoa_4plex ~ fhx_burden, data=df2)
+summary(lm2)
+
+cor.test(df2$FDR_AD, df2$GFAP_simoa_4plex)
+# GFAP Pearson p-value: 0.02
 ```

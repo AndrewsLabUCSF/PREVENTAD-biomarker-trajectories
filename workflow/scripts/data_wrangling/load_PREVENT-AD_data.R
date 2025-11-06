@@ -14,7 +14,7 @@ for (file in files) {
 }
 
 names(PREVENTAD_dat) <- c("AD8", "bp_pulse_weight", "diagnosis", "demographics",  
-                          "medical_history", "genetics", "lab", "plasma_4plex", 
+                          "medical_history", "genetics", "GWAS", "lab", "plasma_4plex", 
                           "plasma_ptau217", "questionnaire")
 
 
@@ -107,21 +107,18 @@ genetics <- PREVENTAD_dat$genetics %>%
     allele1 = as.numeric(str_extract(apoe_genotype, "^\\d")),  # First number
     allele2 = as.numeric(str_extract(apoe_genotype, "\\d$")),  # Last number
     
-    # Count ε4 alleles (primary variable for analysis)
+    # Count alleles (primary variable for analysis)
+    apoe_e2_count = (allele1 == 2) + (allele2 == 2),
+    apoe_e3_count = (allele1 == 3) + (allele2 == 3),
     apoe_e4_count = (allele1 == 4) + (allele2 == 4),
     
-    # ε4 carrier status (binary)
+    # e4 carrier status (binary)
     apoe_e4_carrier = if_else(apoe_e4_count > 0, 1, 0),
     
-    # ε4 carrier status (labeled factor for plots)
+    # e4 carrier status (labeled factor for plots)
     apoe_e4_status = factor(apoe_e4_count,
                             levels = 0:2,
-                            labels = c("Non-carrier", "One ε4", "Two ε4")),
-    
-    # Count ε2 alleles (protective)
-    apoe_e2_count = (allele1 == 2) + (allele2 == 2),
-    
-    apoe_e3_count = (allele1 == 3) + (allele2 == 3),
+                            labels = c("Non-carrier", "One e4", "Two e4")),
     
     # APOE category
     apoe_category = case_when(
@@ -146,6 +143,8 @@ saveRDS(fhx_raw,
          file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_fhx_raw.rds"))
 saveRDS(genetics,
         file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_genetics.rds"))
+saveRDS(PREVENTAD_dat$GWAS,
+        file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_GWAS.rds"))
 saveRDS(apoe,
         file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_apoe.rds"))
 saveRDS(PREVENTAD_dat, 

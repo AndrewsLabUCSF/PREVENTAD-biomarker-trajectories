@@ -18,102 +18,13 @@ lifestyle_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_lifestyle_
 apoe <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_apoe.rds"))
 PREVENTAD_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_dat.rds"))
 cogd_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_cogd_imp_scored.rds"))
+fhx <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_fhx_dat.rds"))
 
 ptau_217 <- PREVENTAD_dat$plasma_ptau217 %>%
   mutate(Candidate_Age = Candidate_Age/12)
 ipms <- PREVENTAD_dat$plasma_4plex %>%
   mutate(Candidate_Age = Candidate_Age/12)
-```
 
-
-# Biomarker trajectories
-## ptau 217
-```{r}
-plot1 <- ptau_217 %>%
-  left_join(apoe, by="CONP_ID") %>%
-  ggplot(aes(x=Candidate_Age, y=ptau217_simoa_UGOT, color=apoe_e4_status)) +
-  # indiv trajectories
-  geom_line(aes(group = CONP_ID), alpha = 0.05, linewidth = 0.3) +
-  # mean trajectories
-  geom_smooth(method = "loess", se = TRUE, linewidth = 1, alpha = 0.2) +
-  labs(x = "Age (years)",
-       y = "p-tau217 (pg/mL)",
-       title = "p-tau217 Trajectories by APOE ε4 Status")
-
-plot1
-```
-
-## ptau 181
-```{r}
-plot2 <- ipms %>%
-  left_join(apoe, by="CONP_ID") %>%
-  ggplot(aes(x=Candidate_Age, y=ptau181_simoa_UGOT, color=apoe_e4_status)) +
-  # indiv trajectories
-  geom_line(aes(group = CONP_ID), alpha = 0.1, linewidth = 0.3) +
-  # mean trajectories
-  geom_smooth(method = "loess", se = TRUE, linewidth = 1, alpha = 0.2) +
-  labs(x = "Age (years)",
-       y = "p-tau181 (pg/mL)",
-       title = "p-tau181 Trajectories by APOE ε4 Status")
-
-plot2
-```
-
-## amyloid beta ratio
-```{r}
-plot3 <- ipms %>%
-  left_join(apoe, by="CONP_ID") %>%
-  ggplot(aes(x=Candidate_Age, y=AB_ratio_simoa_4plex, color=apoe_e4_status)) +
-  # indiv trajectories
-  geom_line(aes(group = CONP_ID), alpha = 0.1, linewidth = 0.3) +
-  # mean trajectories
-  geom_smooth(method = "loess", se = TRUE, linewidth = 1, alpha = 0.2) +
-  labs(x = "Age (years)",
-       y = "Amyloid beta ratio",
-       title = "AB Ratio Trajectories by APOE ε4 Status")
-
-plot3
-```
-
-
-## NfL
-```{r}
-plot4 <- ipms %>%
-  left_join(apoe, by="CONP_ID") %>%
-  ggplot(aes(x=Candidate_Age, y=NFL_simoa_4plex, color=apoe_e4_status)) +
-  # indiv trajectories
-  geom_line(aes(group = CONP_ID), alpha = 0.1, linewidth = 0.3) +
-  # mean trajectories
-  geom_smooth(method = "loess", se = TRUE, linewidth = 1, alpha = 0.2) +
-  labs(x = "Age (years)",
-       y = "NfL (pg/mL)",
-       title = "NfL Trajectories by APOE ε4 Status")
-
-plot4
-```
-
-
-## GFAP
-```{r}
-plot5 <- ipms %>%
-  left_join(apoe, by="CONP_ID") %>%
-  ggplot(aes(x=Candidate_Age, y=GFAP_simoa_4plex, color=apoe_e4_status)) +
-  # indiv trajectories
-  geom_line(aes(group = CONP_ID), alpha = 0.1, linewidth = 0.3) +
-  # mean trajectories
-  geom_smooth(method = "loess", se = TRUE, linewidth = 1, alpha = 0.2) +
-  labs(x = "Age (years)",
-       y = "GFAP (pg/mL)",
-       title = "GFAP Trajectories by APOE ε4 Status")
-
-plot5
-```
-
-
-# Biomarker associations (unadjusted)
-## Family history:biomarkers (baseline)
-```{r}
-fhx <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_fhx_dat.rds"))
 baseline_dat <- fhx %>%
   left_join((ptau_217 %>%
                group_by(CONP_ID) %>%
@@ -123,7 +34,106 @@ baseline_dat <- fhx %>%
                group_by(CONP_ID) %>%
                slice(1)),
             by="CONP_ID") %>%
-  left_join(apoe, by="CONP_ID")
+  left_join(apoe, by="CONP_ID") %>%
+  left_join(cogd_dat, by="CONP_ID") %>%
+  select(CONP_ID, score, Candidate_Age.x, ptau181_simoa_UGOT, ptau217_simoa_UGOT,
+         AB_ratio_simoa_4plex, NFL_simoa_4plex, GFAP_simoa_4plex,
+         apoe_category) %>%
+  pivot_longer(
+    cols = c(ptau181_simoa_UGOT, ptau217_simoa_UGOT, AB_ratio_simoa_4plex,
+             NFL_simoa_4plex, GFAP_simoa_4plex),
+    names_to = "biomarker",
+    values_to = "measure"
+  )
+```
+
+
+# Biomarker trajectories
+## ptau 217
+```{r}
+plot1 <- baseline_dat %>%
+  ggplot(aes(x=apoe_category, y=measure, fill=apoe_category)) +
+  geom_violin(alpha=0.7) +
+  facet_wrap(~ biomarker, scales="free") +
+  geom_boxplot(width=0.1, fill="white") +
+  labs(x = "APOE Category",
+       y = "Biomarker Level (pg/mL or AB ratio)",
+       title = "Biomarker Levels by APOE ε4 Category")
+
+plot1
+```
+
+## ptau 181
+```{r}
+plot2 <- ipms %>%
+  left_join(apoe, by="CONP_ID") %>%
+  ggplot(aes(x=Candidate_Age, y=ptau181_simoa_UGOT, color=apoe_category)) +
+  # indiv trajectories
+  geom_line(aes(group = CONP_ID), alpha = 0.1, linewidth = 0.3) +
+  # mean trajectories
+  geom_smooth(method = "loess", se = TRUE, linewidth = 1, alpha = 0.2) +
+  labs(x = "Age (years)",
+       y = "p-tau181 (pg/mL)",
+       title = "p-tau181 Trajectories by APOE ε4 Category")
+
+plot2
+```
+
+## amyloid beta ratio
+```{r}
+plot3 <- ipms %>%
+  left_join(apoe, by="CONP_ID") %>%
+  ggplot(aes(x=Candidate_Age, y=AB_ratio_simoa_4plex, color=apoe_category)) +
+  # indiv trajectories
+  geom_line(aes(group = CONP_ID), alpha = 0.1, linewidth = 0.3) +
+  # mean trajectories
+  geom_smooth(method = "loess", se = TRUE, linewidth = 1, alpha = 0.2) +
+  labs(x = "Age (years)",
+       y = "Amyloid beta ratio",
+       title = "AB Ratio Trajectories by APOE Category")
+
+plot3
+```
+
+
+## NfL
+```{r}
+plot4 <- ipms %>%
+  left_join(apoe, by="CONP_ID") %>%
+  ggplot(aes(x=Candidate_Age, y=NFL_simoa_4plex, color=apoe_category)) +
+  # indiv trajectories
+  geom_line(aes(group = CONP_ID), alpha = 0.1, linewidth = 0.3) +
+  # mean trajectories
+  geom_smooth(method = "loess", se = TRUE, linewidth = 1, alpha = 0.2) +
+  labs(x = "Age (years)",
+       y = "NfL (pg/mL)",
+       title = "NfL Trajectories by APOE Category")
+
+plot4
+```
+
+
+## GFAP
+```{r}
+plot5 <- ipms %>%
+  left_join(apoe, by="CONP_ID") %>%
+  ggplot(aes(x=Candidate_Age, y=GFAP_simoa_4plex, color=apoe_category)) +
+  # indiv trajectories
+  geom_line(aes(group = CONP_ID), alpha = 0.1, linewidth = 0.3) +
+  # mean trajectories
+  geom_smooth(method = "loess", se = TRUE, linewidth = 1, alpha = 0.2) +
+  labs(x = "Age (years)",
+       y = "GFAP (pg/mL)",
+       title = "GFAP Trajectories by APOE Category")
+
+plot5
+```
+
+
+# Biomarker associations (unadjusted)
+## Family history:biomarkers (baseline)
+```{r}
+
 
 # ptau 217 (slightly >0.05)
 model1 <- lm(ptau217_simoa_UGOT ~ family_members_AD,
@@ -151,24 +161,29 @@ model5 <- lm(GFAP_simoa_4plex ~ family_members_AD,
 summary(model5)
 ```
 
+
+## APOE category:biomarkers (baseline)
+```{r}
+plot1 <- baseline_dat %>%
+  ggplot(aes(x=apoe_category, y=measure, fill=apoe_category)) +
+  geom_violin(alpha=0.7) +
+  facet_wrap(~ biomarker, scales="free") +
+  geom_boxplot(width=0.1, fill="white") +
+  labs(x = "APOE Category",
+       y = "Biomarker Level (pg/mL or AB ratio)",
+       title = "PREVENT-AD Biomarker Levels by APOE Category")
+
+plot1
+ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_APOE_vs_BBM.png"), plot1)
+```
+
 ## CogDrisk:biomarkers (baseline)
 ### ptau 181
 ```{r}
-baseline_dat2 <- cogd_dat %>%
-  left_join(baseline_dat, by="CONP_ID") %>%
-  select(CONP_ID, score, ptau181_simoa_UGOT, ptau217_simoa_UGOT,
-         AB_ratio_simoa_4plex, NFL_simoa_4plex, GFAP_simoa_4plex) %>%
-  pivot_longer(
-    cols = c(ptau181_simoa_UGOT, ptau217_simoa_UGOT, AB_ratio_simoa_4plex,
-             NFL_simoa_4plex, GFAP_simoa_4plex),
-    names_to = "biomarker",
-    values_to = "measure"
-  )
-
-plot1 <- baseline_dat2 %>%
+plot2 <- baseline_dat2 %>%
   ggplot(aes(x = score, y = measure)) +
-  geom_point(alpha = 0.5, size = 2) +
-  geom_smooth(method = "lm", se = TRUE, linewidth = 1.2) +
+  geom_point(alpha = 0.5, size = 1) +
+  geom_smooth(method = "lm", se = TRUE, linewidth = 0.5) +
   facet_wrap(~biomarker, scales="free") + 
   #scale_color_manual(values = c("#2E86AB", "#A23B72", "#F18F01")) +
   labs(x = "CogDrisk Score",
@@ -177,8 +192,9 @@ plot1 <- baseline_dat2 %>%
        title = "CogDrisk Score and AD Blood-based Biomarker Levels in PREVENT-AD") +
   theme_minimal() +
   theme(legend.position = "bottom")
+plot2
 
-ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_CogD_vs_BBM.png"), plot1)
+ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_CogD_vs_BBM.png"), plot2)
 
 # baseline_dat2 %>%
 #   ggplot(aes(x = score, y = ptau181_simoa_UGOT, color = apoe_e4_status)) +
@@ -195,60 +211,60 @@ ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_CogD_vs_BBM.png"), plot1)
 
 ### ptau 217
 ```{r}
-baseline_dat2 %>%
-  ggplot(aes(x = score, y = ptau217_simoa_UGOT, color = apoe_e4_status)) +
+baseline_dat %>%
+  ggplot(aes(x = score, y = ptau217_simoa_UGOT, color = apoe_category)) +
   geom_point(alpha = 0.5, size = 2) +
   geom_smooth(method = "lm", se = TRUE, linewidth = 1.2) +
   scale_color_manual(values = c("#2E86AB", "#A23B72", "#F18F01")) +
   labs(x = "CogDrisk Score",
        y = "p-tau217 (pg/mL)",
        color = "APOE ε4 status",
-       title = "CogDrisk Score and p-tau217 by APOE Status") +
+       title = "CogDrisk Score and p-tau217 by APOE Category") +
   theme_minimal() +
   theme(legend.position = "bottom")
 ```
 
 ### Amyloid beta ratio
 ```{r}
-baseline_dat2 %>%
-  ggplot(aes(x = score, y = AB_ratio_simoa_4plex, color = apoe_e4_status)) +
+baseline_dat %>%
+  ggplot(aes(x = score, y = AB_ratio_simoa_4plex, color = apoe_category)) +
   geom_point(alpha = 0.5, size = 2) +
   geom_smooth(method = "lm", se = TRUE, linewidth = 1.2) +
   scale_color_manual(values = c("#2E86AB", "#A23B72", "#F18F01")) +
   labs(x = "CogDrisk Score",
        y = "AB ratio",
        color = "APOE ε4 status",
-       title = "CogDrisk Score and AB ratio by APOE Status") +
+       title = "CogDrisk Score and AB ratio by APOE Category") +
   theme_minimal() +
   theme(legend.position = "bottom")
 ```
 
 ### NfL
 ```{r}
-baseline_dat2 %>%
-  ggplot(aes(x = score, y = NFL_simoa_4plex, color = apoe_e4_status)) +
+baseline_dat %>%
+  ggplot(aes(x = score, y = NFL_simoa_4plex, color = apoe_category)) +
   geom_point(alpha = 0.5, size = 2) +
   geom_smooth(method = "lm", se = TRUE, linewidth = 1.2) +
   scale_color_manual(values = c("#2E86AB", "#A23B72", "#F18F01")) +
   labs(x = "CogDrisk Score",
        y = "NfL (pg/mL)",
        color = "APOE ε4 status",
-       title = "CogDrisk Score and NfL by APOE Status") +
+       title = "CogDrisk Score and NfL by APOE Category") +
   theme_minimal() +
   theme(legend.position = "bottom")
 ```
 
 ### GFAP
 ```{r}
-baseline_dat2 %>%
-  ggplot(aes(x = score, y = GFAP_simoa_4plex, color = apoe_e4_status)) +
+baseline_dat %>%
+  ggplot(aes(x = score, y = GFAP_simoa_4plex, color = apoe_category)) +
   geom_point(alpha = 0.5, size = 2) +
   geom_smooth(method = "lm", se = TRUE, linewidth = 1.2) +
   scale_color_manual(values = c("#2E86AB", "#A23B72", "#F18F01")) +
   labs(x = "CogDrisk Score",
        y = "GFAP (pg/mL)",
        color = "APOE ε4 status",
-       title = "CogDrisk Score and GFAP by APOE Status") +
+       title = "CogDrisk Score and GFAP by APOE Category") +
   theme_minimal() +
   theme(legend.position = "bottom")
 ```
