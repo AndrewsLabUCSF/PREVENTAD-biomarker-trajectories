@@ -13,10 +13,14 @@ for (file in files) {
   PREVENTAD_dat[[file]] <- data
 }
 
-names(PREVENTAD_dat) <- c("AD8", "bp_pulse_weight", "diagnosis", "demographics",  
-                          "medical_history", "genetics", "GWAS", "lab", "plasma_4plex", 
-                          "plasma_ptau217", "questionnaire")
+names(PREVENTAD_dat) <- c("AD8", "auditory", "bp_pulse_weight", "diagnosis", 
+                          "demographics", "medical_history", "genetics", "GWAS", 
+                          "lab", "meduse", "plasma_4plex", "plasma_ptau217", 
+                          "questionnaire")
 
+# view1 <- PREVENTAD_dat$meduse %>%
+#   group_by(CONP_ID) %>%
+#   slice(1)
 
 # VARIABLE SELECTION ----------------------------------------------------
 # Clinical
@@ -52,11 +56,22 @@ clinical_raw <- PREVENTAD_dat$demographics %>%
                slice(1)),
             by="CONP_ID") %>%
   left_join((PREVENTAD_dat$medical_history %>%
-               select(CONP_ID, past_depression, past_atrial_fibrillation, treatment_diabetes)),
+               select(CONP_ID, past_depression, past_atrial_fibrillation, treatment_diabetes,
+                      treatment_hypertension, treatment_hyperlipidemia)),
+            by="CONP_ID") %>%
+  left_join((PREVENTAD_dat$meduse) %>%
+              select(CONP_ID, SU_medication, PRN_medication) %>%
+              group_by(CONP_ID) %>%
+              slice(1),
             by="CONP_ID") %>%
   left_join((PREVENTAD_dat$questionnaire %>%
                select(CONP_ID, head_injury_hospitalized, head_injury_severe) %>%
                filter_at(vars(head_injury_severe, head_injury_hospitalized), any_vars(!is.na(.)))),
+            by="CONP_ID") %>%
+  left_join((PREVENTAD_dat$auditory %>%
+               select(CONP_ID, diagnosed_impairment) %>%
+               group_by(CONP_ID) %>%
+               slice(1)),
             by="CONP_ID")
 
 
@@ -76,9 +91,20 @@ lifestyle_raw <- PREVENTAD_dat$demographics %>%
                group_by(CONP_ID) %>%
                slice_tail()),
             by="CONP_ID") %>%
-  left_join(PREVENTAD_dat$questionnaire %>%
+  left_join((PREVENTAD_dat$questionnaire %>%
+               select(CONP_ID, gds_score) %>%
+               group_by(CONP_ID) %>%
+               slice(1)),
+            by="CONP_ID") %>%
+  left_join((PREVENTAD_dat$questionnaire %>%
               select(CONP_ID, epoch_score_currently) %>%
               filter(!is.na(epoch_score_currently)) %>%
+              group_by(CONP_ID) %>%
+              slice(1)),
+            by="CONP_ID") %>%
+  left_join((PREVENTAD_dat$questionnaire) %>%
+              select(CONP_ID, pittsburgh_total_score) %>%
+              filter(!is.na(pittsburgh_total_score)) %>%
               group_by(CONP_ID) %>%
               slice(1),
             by="CONP_ID") %>%
@@ -136,9 +162,9 @@ apoe <- genetics %>%
 
 # Save intermediate datasets
 saveRDS(clinical_raw, 
-        file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_clinical_cogd_raw.rds"))
+        file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_clinical_raw.rds"))
 saveRDS(lifestyle_raw, 
-        file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_lifestyle_cogd_raw.rds"))
+        file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_lifestyle_raw.rds"))
 saveRDS(fhx_raw,
          file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_fhx_raw.rds"))
 saveRDS(genetics,

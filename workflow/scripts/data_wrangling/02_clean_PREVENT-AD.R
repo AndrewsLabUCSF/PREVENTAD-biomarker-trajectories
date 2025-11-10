@@ -10,20 +10,31 @@ clinical_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_clinical_ra
 lifestyle_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_lifestyle_raw.rds"))
 
 
+# MEDICATION --------------------------------------------------------------
+# only need to look for antihypertensivse, antidiabetics, and antidepressants
+meduse <- clinical_raw %>%
+  select(CONP_ID, SU_medication, PRN_medication) %>%
+  separate_rows(SU_medication, sep=";") %>%
+  separate_rows(PRN_medication, sep=";")
+
+
+
 # MISSING DATA IMPUTATION -------------------------------------------------
 # Names of variables with any NA
 clinical_vars_to_imp <- names(clinical_raw)[sapply(clinical_raw, anyNA)]
+clinical_vars_to_imp <- clinical_vars_to_imp[clinical_vars_to_imp != "PRN_medication"]
 lifestyle_vars_to_imp <- names(lifestyle_raw)[sapply(lifestyle_raw, anyNA)]
 
 # Subset only the variables with any NA and recode to numeric or factor for MF
 clinical_imp <- clinical_raw %>%
   select(all_of(clinical_vars_to_imp)) %>%
-  mutate_at(c("head_injury_hospitalized", "head_injury_severe"), as.factor)
+  mutate_at(c("head_injury_hospitalized", "head_injury_severe",
+              "diagnosed_impairment"), as.factor)
 
 lifestyle_imp <- lifestyle_raw %>%
   select(all_of(lifestyle_vars_to_imp)) %>%
-  mutate(exer_curr_act2_days = as.numeric(exer_curr_act2_days)) %>%
   mutate(smoking_present = as.factor(smoking_present)) %>%
+  mutate(exer_curr_act2_days = as.numeric(exer_curr_act2_days)) %>%
   mutate(across(ends_with("_intensity"), as.factor)) %>%
   mutate(across(starts_with("social_"), as.factor)) 
 
@@ -40,20 +51,20 @@ clinical_imp_raw[names(clinical_imp_mf_dat)] <- clinical_imp_mf_dat
 lifestyle_imp_raw <- lifestyle_raw
 lifestyle_imp_raw[names(lifestyle_imp_mf_dat)] <- lifestyle_imp_mf_dat
 
-cogd_dat_imp <- prepare_preventad_cogdrisk(clinical_imp_raw,
-                                           lifestyle_imp_raw)
-saveRDS(cogd_dat_imp, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_cogd_imp_raw.rds"))
-saveRDS(clinical_imp_raw, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_clinical_imp_raw.rds"))
-saveRDS(lifestyle_imp_raw, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_lifestyle_imp_raw.rds"))
+# cogd_dat_imp <- prepare_preventad_cogdrisk(clinical_imp_raw,
+#                                            lifestyle_imp_raw)
+# saveRDS(cogd_dat_imp, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_cogd_imp_raw.rds"))
+saveRDS(clinical_imp_raw, file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_clinical_imp_raw.rds"))
+saveRDS(lifestyle_imp_raw, file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_lifestyle_imp_raw.rds"))
 
-cogd_dat_imp_scored <- cogd_dat_imp %>% 
-  select(-c(Education_years, BMI, LDL_value)) %>%
-  mutate(num_cogdrisk_vars = (rowSums(!is.na(.))) - 1) %>%
-  mutate(complete_scores = complete.cases(.)) %>%
-  mutate(score = calculate_cogdrisk(.)) %>%
-  relocate(score, .after=CONP_ID) %>%
-  relocate(complete_scores, .after=score) %>%
-  relocate(num_cogdrisk_vars, .after=complete_scores) %>%
-  select(-complete_scores, -num_cogdrisk_vars)
-
-saveRDS(cogd_dat_imp_scored, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_cogd_imp_scored.rds"))
+# cogd_dat_imp_scored <- cogd_dat_imp %>% 
+#   select(-c(Education_years, BMI, LDL_value)) %>%
+#   mutate(num_cogdrisk_vars = (rowSums(!is.na(.))) - 1) %>%
+#   mutate(complete_scores = complete.cases(.)) %>%
+#   mutate(score = calculate_cogdrisk(.)) %>%
+#   relocate(score, .after=CONP_ID) %>%
+#   relocate(complete_scores, .after=score) %>%
+#   relocate(num_cogdrisk_vars, .after=complete_scores) %>%
+#   select(-complete_scores, -num_cogdrisk_vars)
+# 
+# saveRDS(cogd_dat_imp_scored, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_cogd_imp_scored.rds"))

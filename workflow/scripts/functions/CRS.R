@@ -243,6 +243,178 @@ calculate_cogdrisk <- function(df,
 #   relocate(score, .after=CONP_ID)
 
 
+
+# LIBRA2 ------------------------------------------------------------------
+calculate_libra2 <- function(df, 
+                             alcohol_var="Alcohol",
+                             sleep_var="Sleep_disturbances",
+                             hypertension_var="Hypertension",
+                             diet_var="Diet",
+                             kidneydisease_var="Chronic_kidney_disease",
+                             physact_var="Physical_activity",
+                             socpart_var="Social_participation",
+                             diabetes_var="Diabetes",
+                             obesity_var="Obesity",       
+                             hearingimp_var="Hearing_impairment",
+                             smoking_var="Smoking",
+                             hyperchol_var="Hypercholesterolemia",
+                             chd_var="Coronary_heart_disease",
+                             cogact_var="Cognitive_activity",
+                             depression_var="Depression",
+                             verbose=TRUE
+) {
+  
+  required_vars <- c(alcohol_var, sleep_var, hypertension_var, diet_var,
+                     kidneydisease_var, physact_var, socpart_var, diabetes_var,
+                     obesity_var, hearingimp_var, smoking_var, hyperchol_var,
+                     cogact_var, depression_var)
+  
+  var_names <- c("Alcohol", "Sleep disturbances", "Hypertension", "Diet",
+                 "Chronic kidney disease", "Physical activity", 
+                 "Social participation", "Diabetes", "Obesity",
+                 "Hearing impairment", "Smoking", "Hypercholesterolemia",
+                 "Coronary heart disease", "Cognitive activity", "Depression")
+  
+  available_vars <- required_vars[required_vars %in% names(df)]
+  missing_vars <- setdiff(required_vars, names(df))
+  
+  # Warning message for missing variables
+  if (length(missing_vars) > 0 && verbose) {
+    missing_names <- var_names[match(missing_vars, required_vars)]
+    message("Calculating partial LIBRA2 score.")
+    message("Missing variables: ", paste(missing_names, collapse = ", "))
+    message("Score will be calculated using ", length(available_vars), 
+            " out of ", length(required_vars), " variables.\n")
+  }
+  
+  # Initialize points
+  points <- rep(0, nrow(df))
+  components_used <- c()
+  components_missing <- c()
+  
+  # Calculate score
+  ## High alcohol intake
+  
+  ## Sleep disturbances
+  if (sleep_var %in% names(df)){
+    sleep <- df[[sleep_var]]
+    sleep_points <- if_else(sleep == 0, 0, 1.1, missing=0)
+    points = points + sleep_points
+    components_used <- c(components_used, "sleep disturbances")
+  } else {
+    components_missing <- c(components_missing, "sleep disturbances")
+  }
+  
+  ## Hypertension
+  if (hypertension_var %in% names(df)) {
+    hypertension <- df[[hypertension_var]]
+    hypertension_points <- if_else(hypertension == 0, 0, 1.6, missing=0)
+    points = points + hypertension_points
+    components_used <- c(components_used, "hypertension")
+  } else {
+    components_missing <- c(components_missing, "hypertension")
+  }
+  
+  ## Diet
+  
+  ## Chronic kidney disease
+  
+  ## Physical activity
+  if (physact_var %in% names(df)) {
+    physact <- df[[physact_var]]
+    physact_points <- if_else(physact == 1, 0, -1.9, missing=0)
+    points = points + physact_points
+    components_used <- c(components_used, "physical activity")
+  } else {
+    components_missing <- c(components_missing, "physical activity")
+  }
+  
+  ## Social participation
+  if (socpart_var %in% names(df)) {
+    socpart <- df[[socpart_var]]
+    socpart_points <- if_else(socpart == 0, 0, 2.1, missing=0)
+    points = points + socpart_points
+    components_used <- c(components_used, "social participation")
+  } else {
+    components_missing <- c(components_missing, "social participation")
+  }
+  
+  ## Diabetes
+  if (diabetes_var %in% names(df)) {
+    diabetes <- df[[diabetes_var]]
+    diabetes_points <- if_else(diabetes == 0, 0, 2.2, missing=0)
+    points = points + diabetes_points
+    components_used <- c(components_used, "diabetes")
+  } else {
+    components_missing <- c(components_missing, "diabetes")
+  }
+  
+  ## Obesity
+  if (obesity_var %in% names(df)) {
+    obesity <- df[[obesity_var]]
+    obesity_points <- if_else(obesity == 0, 0, 2.2, missing=0)
+    points = points + obesity_points
+    components_used <- c(components_used, "obesity")
+  } else {
+    components_missing <- c(components_missing, "obesity")
+  }
+  
+  ## Hearing impairment
+  if (hearingimp_var %in% names(df)) {
+    hearingimp <- df[[hearingimp_var]]
+    hearingimp_points <- if_else(hearingimp == 0, 0, 2.4, missing=0)
+    points = points + hearingimp_points
+    components_used <- c(components_used, "hearing impairment")
+  } else {
+    components_missing <- c(components_missing, "hearing impairment")
+  }
+  
+  ## Smoking
+  if (smoking_var %in% names(df)) {
+    smoking <- df[[smoking_var]]
+    smoking_points <- if_else(smoking == 0, 0, 2.5, missing=0)
+    points = points + smoking_points
+    components_used <- c(components_used, "smoking")
+  } else {
+    components_missing <- c(components_missing, "smoking")
+  }
+  
+  ## Hypercholesterolemia
+  if (hyperchol_var %in% names(df)) {
+    hyperchol <- df[[hyperchol_var]]
+    hyperchol_points <- if_else(hyperchol == 0, 0, 2.6, missing=0)
+    points = points + hyperchol_points
+    components_used <- c(components_used, "hypercholesterolemia")
+  }
+  
+  ## CHD
+  
+  ## Cognitive activity
+  if (cogact_var %in% names(df)) {
+    cogact <- df[[cogact_var]]
+    cogact_points <- if_else(cogact == 0, 0, -3.0, missing=0)
+    points = points + cogact_points
+    components_used <- c(components_used, "cognitive activity")
+  } else {
+    components_missing <- c(components_missing, "cognitive activity")
+  }
+  
+  ## Depression
+  if (depression_var %in% names(df)) {
+    depression <- df[[depression_var]]
+    depression_points <- if_else(depression == 0, 0, 4.1, missing=0)
+    points = points + depression_points
+    components_used <- c(components_used, "depression")
+  } else {
+    components_missing <- c(components_missing, "depression")
+  }
+  
+  return(points)
+  
+}
+
+
+
 # LIBRA -------------------------------------------------------------------
 calculate_libra <- function(df, 
                             hypertension_var="Hypertension",
