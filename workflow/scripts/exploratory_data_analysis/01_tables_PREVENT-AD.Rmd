@@ -1,0 +1,127 @@
+---
+title: "PREVENT-AD Demographic Summary"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warnings = FALSE)
+knitr::opts_knit$set(root.dir = here::here())
+```
+
+```{r setting}
+library(stringr)
+
+source('workflow/scripts/config.R')
+
+clinical_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_clinical_raw.rds"))
+lifestyle_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_lifestyle_raw.rds"))
+apoe <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_apoe.rds"))
+biomarkers <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_biomarkers.rds"))
+PREVENTAD_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_dat.rds"))
+```
+
+# Demographics stratified by clinical diagnosis
+```{r}
+table1_gtsummary <- PREVENTAD_dat$demographics %>% #clinical_raw %>%
+  select(CONP_ID, Sex, Education_years, Ethnicity) %>%
+  left_join((PREVENTAD_dat$diagnosis %>%
+              select(CONP_ID, Clinical_diagnosis)), by="CONP_ID") %>%
+  left_join((clinical_raw %>%
+               select(CONP_ID, Candidate_Age)), by="CONP_ID") %>%
+  left_join((apoe %>%
+               select(CONP_ID, apoe_category)), by="CONP_ID") %>%
+  mutate(Clinical_diagnosis = if_else(is.na(Clinical_diagnosis), "CN", Clinical_diagnosis)) %>%
+  mutate(Candidate_Age = Candidate_Age/12) %>%
+  mutate(Ethnicity = str_to_sentence(Ethnicity)) %>%
+  # Changing labels
+  mutate(Education_level = case_when(Education_years <= 12 ~ "High school or less (≤12 years)",
+                                     Education_years > 12 & Education_years < 16 ~ "Some college (13-16 years)",
+                                     Education_years > 16 ~ "Postgraduate",
+                                     TRUE ~ NA) %>% factor(levels=c("High school or less (≤12 years)",
+                                                                    "Some college (13-16 years)",
+                                                                    "Postgraduate"))) %>%
+  relocate(Sex, .after=CONP_ID) %>%
+  relocate(Candidate_Age, .after=Sex) %>%
+  relocate(Education_level, .after=Education_years) %>%
+  select(-CONP_ID) %>%
+  tbl_summary(
+    by = Clinical_diagnosis,
+    # type = list(Hypertension ~ "categorical",
+    #             High_cholesterol ~ "categorical",
+    #             Depression ~ "categorical",
+    #             Atrial_fibrillation ~ "categorical",
+    #             TBI ~ "categorical"),
+    label = list(Candidate_Age = "Age",
+                 Education_years = "Education (years)",
+                 Education_level = "Education (level)",
+                 apoe_category = "APOE category"),
+    statistic = list(all_continuous() ~ "{mean} ({sd})",
+                     all_categorical() ~ "{n} ({p})")
+  ) %>%
+  modify_spanning_header(all_stat_cols() ~ "**Clinical diagnosis**") %>%
+  modify_footnote(all_stat_cols() ~ "Mean (SD) for continuous; n (%) for categorical") %>%
+  bold_labels() %>%
+  italicize_levels() %>%
+  as_gt() %>%
+  #tab_row_group(label = md("*Medical History*"), rows = 13:31) %>%
+  #tab_row_group(label = md("**Demographics**"), rows = 1:12) %>%
+  tab_style(
+    style = list(cell_text(weight = "bold"),
+                 cell_fill(color = "#f8f9fa")),
+    locations = cells_row_groups()
+  )
+table1_gtsummary
+
+gtsave(table1_gtsummary, filename = file.path(EDA_OUTPUT_PATH$tables, "PREVENT-AD_demographics.png"))
+```
+
+
+# Biomarker data availability table
+```{r}
+biomarker_cols <- names(biomarkers)[7:18]
+
+table2_gtsummary <- biomarkers %>%
+  pivot_longer(
+    cols = all_of(biomarker_cols),
+    names_to = "biomarker",
+    values_to = "value"
+  ) %>%
+  group_by(CONP_ID, biomarker) %>%
+  summarise(
+    has_data = any(!is.na(value)),
+    has_2plus = sum(!is.na(value)) >= 2,
+    .groups = "drop"
+  ) %>%
+  group_by(biomarker) %>%
+  summarise(
+    `≥1 Measurement` = sum(has_data),
+    `≥2 Measurements` = sum(has_2plus),
+    total_n = n_distinct(CONP_ID),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    `≥1 Measurement` = paste0(`≥1 Measurement`, " (", round(`≥1 Measurement`/total_n*100, 1), "%)"),
+    `≥2 Measurements` = paste0(`≥2 Measurements`, " (", round(`≥2 Measurements`/total_n*100, 1), "%)")
+  ) %>%
+  select(-total_n) %>%
+  gt() %>%
+  cols_label(
+    biomarker = md("**Biomarker**"),
+    `≥1 Measurement` = md("**≥1 Measurement**"),
+    `≥2 Measurements` = md("**≥2 Measurements**")
+  ) %>%
+  tab_footnote(
+    footnote = "Number and percentage of participants with specified number of measurements",
+    locations = cells_column_labels(columns = c(`≥1 Measurement`, `≥2 Measurements`))
+  ) %>%
+  tab_style(
+    style = list(cell_text(style = "italic")),
+    locations = cells_body(columns = biomarker)
+  )
+
+table2_gtsummary
+gtsave(table2_gtsummary, filename = file.path(EDA_OUTPUT_PATH$tables, "PREVENT-AD_BBM_dataavail.png"))
+```
+
+
+

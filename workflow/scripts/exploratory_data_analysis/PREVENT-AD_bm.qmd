@@ -13,32 +13,35 @@ library(ggpubr)
 
 source('workflow/scripts/config.R')
 
-clinical_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_clinical_raw.rds"))
-lifestyle_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_lifestyle_raw.rds"))
+clinical_raw <- readRDS(file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_clinical_imp_raw.rds"))
 apoe <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_apoe.rds"))
-PREVENTAD_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_dat.rds"))
-cogd_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_cogd_imp_scored.rds"))
+grs <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_GRS.rds"))
+biomarkers <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_biomarkers.rds"))
+cogd_dat <- readRDS(file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_cogd_scored_dat.rds"))
+libra_dat <- readRDS(file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_libra_scored_dat.rds"))
 fhx <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_fhx_dat.rds"))
 
-ptau_217 <- PREVENTAD_dat$plasma_ptau217 %>%
-  mutate(Candidate_Age = Candidate_Age/12)
-ipms <- PREVENTAD_dat$plasma_4plex %>%
-  mutate(Candidate_Age = Candidate_Age/12)
-
 baseline_dat <- fhx %>%
-  left_join((ptau_217 %>%
-               group_by(CONP_ID) %>%
-               slice(1)),
+  left_join((clinical_raw %>%
+               select(CONP_ID, Sex, Education_years)),
             by="CONP_ID") %>%
-  left_join((ipms %>%
+  left_join((biomarkers %>%
                group_by(CONP_ID) %>%
                slice(1)),
             by="CONP_ID") %>%
   left_join(apoe, by="CONP_ID") %>%
-  left_join(cogd_dat, by="CONP_ID") %>%
-  select(CONP_ID, score, Candidate_Age.x, ptau181_simoa_UGOT, ptau217_simoa_UGOT,
-         AB_ratio_simoa_4plex, NFL_simoa_4plex, GFAP_simoa_4plex,
-         apoe_category) %>%
+  left_join((grs %>%
+               select(CONP_ID, GRS)),
+            by="CONP_ID") %>%
+  left_join((cogd_dat %>% 
+               select(CONP_ID, score_cogd=score)),
+            by="CONP_ID") %>%
+  left_join((libra_dat %>% 
+               select(CONP_ID, score_libra2=score)),
+            by="CONP_ID") %>%
+  select(CONP_ID, score_cogd, score_libra2, GRS, Candidate_Age, Sex,
+         Education_years, ptau181_simoa_UGOT, ptau217_simoa_UGOT, AB_ratio_simoa_4plex, 
+         NFL_simoa_4plex, GFAP_simoa_4plex, apoe_category) %>%
   pivot_longer(
     cols = c(ptau181_simoa_UGOT, ptau217_simoa_UGOT, AB_ratio_simoa_4plex,
              NFL_simoa_4plex, GFAP_simoa_4plex),
@@ -47,226 +50,237 @@ baseline_dat <- fhx %>%
   )
 ```
 
+# Biomarker data availability table
+```{r}
+biomarker_cols <- names(biomarkers)[7:18]
+
+df1 <- biomarkers %>%
+  group_by(CONP_ID) %>%
+  summarise(
+    across(
+      all_of(biomarker_cols),
+      ~any(!is.na(.)),  # TRUE if participant has at least 1 measurement
+      .names = "{.col}"
+    )
+  ) %>%
+  ungroup()
+
+table1 <- df1 %>%
+  select(-CONP_ID) %>%
+  tbl_summary(
+    type = everything() ~ "dichotomous",
+    statistic = list(everything() ~ "{n} ({p}%)"),
+    digits = list(everything() ~ c(0, 1))
+  ) %>%
+  modify_header(
+    label = "**Biomarker**",
+    stat_0 = "**N Participants with Data (%)**"
+  ) %>%
+  modify_footnote(
+    stat_0 ~ "Participants counted if they have at least 1 measurement for that biomarker"
+  ) %>%
+  #bold_labels() %>%
+  italicize_labels() %>%
+  as_gt() %>%
+  tab_style(
+    style = list(cell_text(weight = "normal"), 
+                 cell_fill(color = "#f8f9fa")),
+    locations = cells_row_groups()
+  )
+
+table1
+```
+
+
+# Biomarker levels by APOE category (baseline)
+```{r}
+library(broom)
+
+pval_df1 <- baseline_dat %>%
+  group_by(biomarker) %>%
+  summarise(
+    p_value = tryCatch({
+      anova(lm(measure ~ apoe_category))$`Pr(>F)`[1]
+    }, error = function(e) NA_real_),
+    .groups = "drop"
+  ) %>%
+  filter(!is.na(p_value)) %>%
+  mutate(p_label = case_when(
+    p_value < 0.001 ~ "p < 0.001",
+    p_value < 0.01 ~ paste0("p = ", round(p_value, 3)),
+    TRUE ~ paste0("p = ", round(p_value, 2))
+  ))
+
+plot1 <- baseline_dat %>%
+  ggplot(aes(x=apoe_category, y=measure, fill=apoe_category)) +
+  geom_violin(alpha=0.7) +
+  facet_wrap(~ biomarker, scales="free") +
+  geom_boxplot(width=0.1, fill="white") +
+  geom_text(data = pval_df1,
+            aes(Inf, Inf, label = p_label),
+            hjust = 2,
+            vjust = 1.5,
+            size = 3,
+            inherit.aes = FALSE) +
+  labs(x = "APOE Category",
+       y = "Biomarker Level (pg/mL or AB ratio)",
+       title = "Biomarker Levels by APOE Category in PREVENT-AD") +
+  theme(legend.position="none")
+
+plot1
+# ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_APOE_vs_BBM.png"), plot1)
+```
 
 # Biomarker trajectories
-## ptau 217
 ```{r}
-plot1 <- baseline_dat %>%
-  ggplot(aes(x=apoe_category, y=measure, fill=apoe_category)) +
-  geom_violin(alpha=0.7) +
+biomarkers_longer <- biomarkers %>%
+  pivot_longer(
+    cols = c(ptau181_simoa_UGOT, ptau217_simoa_UGOT, AB_ratio_simoa_4plex,
+             NFL_simoa_4plex, GFAP_simoa_4plex),
+    names_to = "biomarker",
+    values_to = "measure"
+  ) %>%
+  mutate(age_centered = Candidate_Age - 65)
+
+plot2 <- ggplot(biomarkers_longer, aes(x=Candidate_Age, y=measure)) +
+  geom_line(aes(group=CONP_ID), linewidth=0.3) +
   facet_wrap(~ biomarker, scales="free") +
-  geom_boxplot(width=0.1, fill="white") +
-  labs(x = "APOE Category",
-       y = "Biomarker Level (pg/mL or AB ratio)",
-       title = "Biomarker Levels by APOE ε4 Category")
-
-plot1
-```
-
-## ptau 181
-```{r}
-plot2 <- ipms %>%
-  left_join(apoe, by="CONP_ID") %>%
-  ggplot(aes(x=Candidate_Age, y=ptau181_simoa_UGOT, color=apoe_category)) +
-  # indiv trajectories
-  geom_line(aes(group = CONP_ID), alpha = 0.1, linewidth = 0.3) +
-  # mean trajectories
-  geom_smooth(method = "loess", se = TRUE, linewidth = 1, alpha = 0.2) +
   labs(x = "Age (years)",
-       y = "p-tau181 (pg/mL)",
-       title = "p-tau181 Trajectories by APOE ε4 Category")
-
+       y = "Biomarker Level (pg/mL or AB ratio)",
+       title = "PREVENT-AD Individual Biomarker Trajectories")
 plot2
-```
 
-## amyloid beta ratio
-```{r}
-plot3 <- ipms %>%
-  left_join(apoe, by="CONP_ID") %>%
-  ggplot(aes(x=Candidate_Age, y=AB_ratio_simoa_4plex, color=apoe_category)) +
+plot3 <- ggplot(biomarkers_longer, aes(x=Candidate_Age, y=measure)) +
   # indiv trajectories
-  geom_line(aes(group = CONP_ID), alpha = 0.1, linewidth = 0.3) +
+  geom_line(aes(group=CONP_ID), alpha=0.1, linewidth=0.3) +
   # mean trajectories
-  geom_smooth(method = "loess", se = TRUE, linewidth = 1, alpha = 0.2) +
-  labs(x = "Age (years)",
-       y = "Amyloid beta ratio",
-       title = "AB Ratio Trajectories by APOE Category")
-
-plot3
-```
-
-
-## NfL
-```{r}
-plot4 <- ipms %>%
-  left_join(apoe, by="CONP_ID") %>%
-  ggplot(aes(x=Candidate_Age, y=NFL_simoa_4plex, color=apoe_category)) +
-  # indiv trajectories
-  geom_line(aes(group = CONP_ID), alpha = 0.1, linewidth = 0.3) +
-  # mean trajectories
-  geom_smooth(method = "loess", se = TRUE, linewidth = 1, alpha = 0.2) +
-  labs(x = "Age (years)",
-       y = "NfL (pg/mL)",
-       title = "NfL Trajectories by APOE Category")
-
-plot4
-```
-
-
-## GFAP
-```{r}
-plot5 <- ipms %>%
-  left_join(apoe, by="CONP_ID") %>%
-  ggplot(aes(x=Candidate_Age, y=GFAP_simoa_4plex, color=apoe_category)) +
-  # indiv trajectories
-  geom_line(aes(group = CONP_ID), alpha = 0.1, linewidth = 0.3) +
-  # mean trajectories
-  geom_smooth(method = "loess", se = TRUE, linewidth = 1, alpha = 0.2) +
-  labs(x = "Age (years)",
-       y = "GFAP (pg/mL)",
-       title = "GFAP Trajectories by APOE Category")
-
-plot5
-```
-
-
-# Biomarker associations (unadjusted)
-## Family history:biomarkers (baseline)
-```{r}
-
-
-# ptau 217 (slightly >0.05)
-model1 <- lm(ptau217_simoa_UGOT ~ family_members_AD,
-             data=baseline_dat)
-summary(model1)
-
-# ptau 181 (>0.05)
-model2 <- lm(ptau181_simoa_UGOT ~ family_members_AD,
-             data=baseline_dat)
-summary(model2)
-
-# amyloid beta ratio (>0.05)
-model3 <- lm(AB_ratio_simoa_4plex ~ family_members_AD,
-             data=baseline_dat)
-summary(model3)
-
-# NfL (<0.05)
-model4 <- lm(NFL_simoa_4plex ~ family_members_AD,
-             data=baseline_dat)
-summary(model4)
-
-# GFAP
-model5 <- lm(GFAP_simoa_4plex ~ family_members_AD,
-             data=baseline_dat)
-summary(model5)
-```
-
-
-## APOE category:biomarkers (baseline)
-```{r}
-plot1 <- baseline_dat %>%
-  ggplot(aes(x=apoe_category, y=measure, fill=apoe_category)) +
-  geom_violin(alpha=0.7) +
+  geom_smooth(method = "loess", se = TRUE, linewidth = 1, alpha = 0.5) +
   facet_wrap(~ biomarker, scales="free") +
-  geom_boxplot(width=0.1, fill="white") +
-  labs(x = "APOE Category",
+  labs(x = "Age (years)",
        y = "Biomarker Level (pg/mL or AB ratio)",
-       title = "PREVENT-AD Biomarker Levels by APOE Category")
-
-plot1
-ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_APOE_vs_BBM.png"), plot1)
+       title = "PREVENT-AD Mean Biomarker Trajectories")
+plot3
+  
+# Saving plots
+#ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_BBM_traj_indiv.png"), plot2)
+ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_BBM_traj_mean.png"), plot3)
 ```
 
-## CogDrisk:biomarkers (baseline)
-### ptau 181
+
+# Biomarker associations (baseline)
+## GRS:biomarkers
 ```{r}
-plot2 <- baseline_dat2 %>%
-  ggplot(aes(x = score, y = measure)) +
+pval_df1 <- baseline_dat %>%
+  group_by(biomarker) %>%
+  summarise(
+    p_value = tryCatch({
+      anova(lm(measure ~ GRS))$`Pr(>F)`[1]
+    }, error = function(e) NA_real_),
+    .groups = "drop"
+  ) %>%
+  filter(!is.na(p_value)) %>%
+  mutate(p_label = case_when(
+    p_value < 0.001 ~ "p < 0.001",
+    p_value < 0.01 ~ paste0("p = ", round(p_value, 3)),
+    TRUE ~ paste0("p = ", round(p_value, 2))
+  ))
+
+plot4 <- baseline_dat %>%
+  ggplot(aes(x = GRS, y = measure)) +
   geom_point(alpha = 0.5, size = 1) +
   geom_smooth(method = "lm", se = TRUE, linewidth = 0.5) +
+  geom_text(data = pval_df1,
+            aes(Inf, Inf, label = p_label), 
+            hjust = 1,
+            vjust = 2,
+            size = 3) +
   facet_wrap(~biomarker, scales="free") + 
-  #scale_color_manual(values = c("#2E86AB", "#A23B72", "#F18F01")) +
+  labs(x = "GRS",
+       y = "Biomarker Level (pg/mL or AB ratio)",
+       title = "GRS and AD Blood-based Biomarker Levels in PREVENT-AD") +
+  theme_minimal() +
+  theme(legend.position = "bottom") 
+plot4
+
+ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_GRS_vs_BBM.png"), plot4)
+```
+
+
+## CogDrisk:biomarkers
+```{r}
+library(glue)
+
+pval_df2 <- baseline_dat %>%
+  group_by(biomarker) %>%
+  summarise(
+    p_value = tryCatch({
+      anova(lm(measure ~ score_cogd))$`Pr(>F)`[1]
+    }, error = function(e) NA_real_),
+    .groups = "drop"
+  ) %>%
+  filter(!is.na(p_value)) %>%
+  mutate(p_label = case_when(
+    p_value < 0.001 ~ "p < 0.001",
+    p_value < 0.01 ~ paste0("p = ", round(p_value, 3)),
+    TRUE ~ paste0("p = ", round(p_value, 2))
+  ))
+
+plot5 <- baseline_dat %>%
+  ggplot(aes(x = score_cogd, y = measure)) +
+  geom_point(alpha = 0.5, size = 1) +
+  geom_smooth(method = "lm", se = TRUE, linewidth = 0.5) +
+  geom_text(data = pval_df2,
+            aes(Inf, -Inf, label = p_label), 
+            hjust = 1,
+            vjust = -1,
+            size = 3) +
+  facet_wrap(~biomarker, scales="free") + 
   labs(x = "CogDrisk Score",
        y = "Biomarker Level (pg/mL or AB ratio)",
-       color = "APOE ε4 status",
        title = "CogDrisk Score and AD Blood-based Biomarker Levels in PREVENT-AD") +
   theme_minimal() +
-  theme(legend.position = "bottom")
-plot2
+  theme(legend.position = "bottom") 
+plot5
 
-ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_CogD_vs_BBM.png"), plot2)
-
-# baseline_dat2 %>%
-#   ggplot(aes(x = score, y = ptau181_simoa_UGOT, color = apoe_e4_status)) +
-#   geom_point(alpha = 0.5, size = 2) +
-#   geom_smooth(method = "lm", se = TRUE, linewidth = 1.2) +
-#   scale_color_manual(values = c("#2E86AB", "#A23B72", "#F18F01")) +
-#   labs(x = "CogDrisk Score",
-#        y = "p-tau181 (pg/mL)",
-#        color = "APOE ε4 status",
-#        title = "CogDrisk Score and p-tau181 by APOE Status") +
-#   theme_minimal() +
-#   theme(legend.position = "bottom")
+ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_CogD_vs_BBM.png"), plot5)
 ```
 
-### ptau 217
+
+## LIBRA2:biomarkers 
 ```{r}
-baseline_dat %>%
-  ggplot(aes(x = score, y = ptau217_simoa_UGOT, color = apoe_category)) +
-  geom_point(alpha = 0.5, size = 2) +
-  geom_smooth(method = "lm", se = TRUE, linewidth = 1.2) +
-  scale_color_manual(values = c("#2E86AB", "#A23B72", "#F18F01")) +
-  labs(x = "CogDrisk Score",
-       y = "p-tau217 (pg/mL)",
-       color = "APOE ε4 status",
-       title = "CogDrisk Score and p-tau217 by APOE Category") +
+pval_df3 <- baseline_dat %>%
+  group_by(biomarker) %>%
+  summarise(
+    p_value = tryCatch({
+      anova(lm(measure ~ score_libra2 + Candidate_Age + Sex + Education_years))$`Pr(>F)`[1]
+    }, error = function(e) NA_real_),
+    .groups = "drop"
+  ) %>%
+  filter(!is.na(p_value)) %>%
+  mutate(p_label = case_when(
+    p_value < 0.001 ~ "p < 0.001",
+    p_value < 0.01 ~ paste0("p = ", round(p_value, 3)),
+    TRUE ~ paste0("p = ", round(p_value, 2))
+  ))
+
+plot6 <- baseline_dat %>%
+  ggplot(aes(x = score_libra2, y = measure)) +
+  geom_point(alpha = 0.5, size = 1) +
+  geom_smooth(method = "lm", se = TRUE, linewidth = 0.5) +
+  geom_text(data = pval_df3,
+            aes(Inf, Inf, label = p_label), 
+            hjust = 1,
+            vjust = 2,
+            size = 3) +
+  facet_wrap(~biomarker, scales="free") + 
+  labs(x = "LIBRA2 Score",
+       y = "Biomarker Level (pg/mL or AB ratio)",
+       title = "LIBRA2 Score and AD Blood-based Biomarker Levels in PREVENT-AD",
+       subtitle = "ANOVA p-value for sex, age, and education years") +
   theme_minimal() +
-  theme(legend.position = "bottom")
+  theme(legend.position = "bottom") 
+plot6
+
+#ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_LIBRA2_vs_BBM.png"), plot6)
 ```
 
-### Amyloid beta ratio
-```{r}
-baseline_dat %>%
-  ggplot(aes(x = score, y = AB_ratio_simoa_4plex, color = apoe_category)) +
-  geom_point(alpha = 0.5, size = 2) +
-  geom_smooth(method = "lm", se = TRUE, linewidth = 1.2) +
-  scale_color_manual(values = c("#2E86AB", "#A23B72", "#F18F01")) +
-  labs(x = "CogDrisk Score",
-       y = "AB ratio",
-       color = "APOE ε4 status",
-       title = "CogDrisk Score and AB ratio by APOE Category") +
-  theme_minimal() +
-  theme(legend.position = "bottom")
-```
-
-### NfL
-```{r}
-baseline_dat %>%
-  ggplot(aes(x = score, y = NFL_simoa_4plex, color = apoe_category)) +
-  geom_point(alpha = 0.5, size = 2) +
-  geom_smooth(method = "lm", se = TRUE, linewidth = 1.2) +
-  scale_color_manual(values = c("#2E86AB", "#A23B72", "#F18F01")) +
-  labs(x = "CogDrisk Score",
-       y = "NfL (pg/mL)",
-       color = "APOE ε4 status",
-       title = "CogDrisk Score and NfL by APOE Category") +
-  theme_minimal() +
-  theme(legend.position = "bottom")
-```
-
-### GFAP
-```{r}
-baseline_dat %>%
-  ggplot(aes(x = score, y = GFAP_simoa_4plex, color = apoe_category)) +
-  geom_point(alpha = 0.5, size = 2) +
-  geom_smooth(method = "lm", se = TRUE, linewidth = 1.2) +
-  scale_color_manual(values = c("#2E86AB", "#A23B72", "#F18F01")) +
-  labs(x = "CogDrisk Score",
-       y = "GFAP (pg/mL)",
-       color = "APOE ε4 status",
-       title = "CogDrisk Score and GFAP by APOE Category") +
-  theme_minimal() +
-  theme(legend.position = "bottom")
-```
-
-##

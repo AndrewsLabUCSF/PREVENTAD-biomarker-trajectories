@@ -1,0 +1,166 @@
+---
+title: "CogDrisk Complete Case Analysis"
+format: html
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warnings = FALSE)
+knitr::opts_knit$set(root.dir = here::here())
+```
+
+```{r setting}
+library(ggpubr)
+library(missForest)
+
+source('workflow/scripts/config.R')
+source(CRS_FN)
+source(COGD_RECODE_FN)
+
+clinical_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_clinical_raw.rds"))
+lifestyle_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_lifestyle_raw.rds"))
+
+dat_cogd_scored <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_cogd_scored.rds"))
+dat_cogd_imp_scored <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_cogd_imp_scored.rds"))
+dat_cogd_exer_imp_scored <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_cogd_exercise1_imp_scored.rds"))
+```
+
+
+## Complete CogDrisk scores
+```{r}
+complete_cogd <- dat_cogd_scored %>%
+  filter(complete_scores == TRUE)
+```
+
+## CogDrisk scores by number of factors used for calculation
+```{r}
+df <- dat_cogd_scored %>%
+  select(CONP_ID, score, num_cogdrisk_vars, complete_scores) 
+
+ggplot(df, aes(x=num_cogdrisk_vars)) +
+  geom_bar(fill = "steelblue") +
+  scale_x_continuous(labels=df$num_cogdrisk_vars, breaks=df$num_cogdrisk_vars) +
+  geom_text(stat = "count",
+            aes(label=after_stat(count)),
+            vjust = -0.5)
+
+completeness_summary <- df %>%
+   group_by(num_cogdrisk_vars) %>%
+   summarise(
+     percent_cases = (n() / nrow(df)) * 100,
+     min_score = min(score),
+     mean_score = mean(score),
+     max_score = max(score),
+     sd_score = sd(score)
+   )
+completeness_summary
+
+ggplot(complete_cogd, aes(x=score, y=as.factor(1))) +
+  geom_violin() 
+```
+
+
+## Comparing missing data imputation techniques
+```{r}
+# Dataframe of all scores
+df2 <- complete_cogd %>%
+  select(CONP_ID, complete_score=score) %>%
+  # Imputing all data
+  left_join((dat_cogd_imp_scored %>%
+               select(CONP_ID, imp_all_score=score)),
+            by="CONP_ID") %>%
+  # Imputing all lifestyle vars and first exercise activities
+  left_join((dat_cogd_exer_imp_scored %>%
+              select(CONP_ID, imp_exer_score=score)),
+            by="CONP_ID")
+
+# Pivot longer for ggplot  
+df2_longer <- df2 %>%
+  pivot_longer(
+    cols = c(complete_score, imp_all_score, imp_exer_score),
+    names_to = "method",
+    values_to = "score_value"
+  ) %>%
+  mutate(method = recode(method,
+                         "complete_score" = "original (complete cases)",
+                         "imp_all_score" = "imputed (all data)",
+                         "imp_exer_score" = "imputed (exer_act1)"))
+
+# SD ratio and Wilcox tests
+var_ratio1 <- sd(df2$imp_all_score) / sd(df2$complete_score, na.rm = TRUE)
+var_ratio2 <- sd(df2$imp_exer_score) / sd(df2$complete_score, na.rm = TRUE)
+wilcox.test(df2$complete_score, df2$imp_all_score)
+wilcox.test(df2$complete_score, df2$imp_exer_score)
+
+plot1 <- ggplot(df2_longer, aes(x=method, y=score_value, fill=method)) +
+  geom_violin(alpha=0.7) +
+  geom_boxplot(width=0.1, fill="white") +
+  stat_compare_means(
+    comparisons = list(c("imputed (all data)", "original (complete cases)"),
+                       c("imputed (exer_act1)", "original (complete cases)")),
+    method="wilcox.test",
+    label.x=1.5
+  ) +
+  labs(subtitle=paste0("SD ratio (imputed (all) vs cogd) = ", round(var_ratio1, 3), 
+                       "; SD ratio (imputed (exer_act1) vs cogd) = ", round(var_ratio2, 3))) +
+  ggtitle("Comparing imputation techniques for CogDrisk against original complete cases")
+
+plot1
+# ggsave(plot1, filename = file.path(EDA_OUTPUT_PATH$figures, "CogD_imputation_comparison.png"))
+```
+
+
+
+### Scatterplots of CogDrisk vs BBM (at first visit)
+```{r}
+df3 <- data_cogd_scored %>%
+  select(CONP_ID, score) %>%
+  left_join((complete_cogd %>%
+               select(CONP_ID, complete_score=score)),
+            by="CONP_ID") %>%
+  left_join((data_cogd_imp_scored %>%
+               select(CONP_ID, imp_score=score)),
+            by="CONP_ID") %>%
+  left_join((PREVENTAD_dat$plasma_ptau217 %>%
+               group_by(CONP_ID) %>%
+               slice(1)), by="CONP_ID") %>%
+  select(CONP_ID, score, complete_score, imp_score, ptau217_simoa_UGOT) %>%
+  pivot_longer(
+    cols = c(score, complete_score, imp_score),
+    names_to = "method",
+    values_to = "score_value"
+  ) %>%
+  mutate(method = recode(method,
+                         "score" = "original",
+                         "complete_score" = "original (complete cases)",
+                         "imp_score" = "imputed"))
+
+ggplot(df3, aes(x=score_value, y=ptau217_simoa_UGOT, color=method)) +
+  geom_point() +
+  facet_wrap(~method) +
+  ggtitle("Scatterplot of CogDrisk scores vs ptau217 (at first visit)") +
+  geom_smooth(method=lm)
+  # geom_density_2d(aes(fill=..density..),z geom="raster")
+
+ipms_bbm <- complete_cogd
+  left_join((ipms_dataset %>%
+              select(CONP_ID, Study_visit_label, ptau181_simoa_UGOT,
+                     GFAP_simoa_4plex, AB_ratio_simoa_4plex) %>%
+              group_by(CONP_ID) %>%
+              slice(1)),
+            by="CONP_ID")
+
+ggplot(ipms_bbm, aes(x=score, y=ptau181_simoa_UGOT)) +
+  geom_point(shape=1) +
+  ggtitle("Scatterplot of CogDrisk score vs ptau181 (at first visit)") +
+  geom_smooth(method="lm")
+
+ggplot(ipms_bbm, aes(x=score, y=GFAP_simoa_4plex)) +
+  geom_point(shape=1) +
+  ggtitle("Scatterplot of CogDrisk score vs GFAP (at first visit)") +
+  geom_smooth(method="lm")
+
+ggplot(ipms_bbm, aes(x=score, y=AB_ratio_simoa_4plex)) +
+  geom_point(shape=1) +
+  ggtitle("Scatterplot of CogDrisk score vs AB ratio (at first visit)") +
+  geom_smooth(method="lm")
+```
