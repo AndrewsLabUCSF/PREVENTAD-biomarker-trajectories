@@ -160,6 +160,15 @@ apoe <- genetics %>%
   select(CONP_ID, starts_with("apoe_"))
 
 
+# Biomarker table
+biomarkers <- PREVENTAD_dat$plasma_4plex %>%
+  full_join(PREVENTAD_dat$plasma_ptau217, 
+            by=c("CONP_ID", "CONP_CandID", "Study_visit_label", "Visit_label", 
+                 "Date_taken", "Candidate_Age")) %>%
+  mutate(Candidate_Age = Candidate_Age/12) %>%
+  arrange(CONP_ID)
+
+
 # Save intermediate datasets
 saveRDS(clinical_raw, 
         file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_clinical_raw.rds"))
@@ -173,5 +182,7 @@ saveRDS(PREVENTAD_dat$GWAS,
         file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_GWAS.rds"))
 saveRDS(apoe,
         file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_apoe.rds"))
+saveRDS(biomarkers,
+        file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_biomarkers.rds"))
 saveRDS(PREVENTAD_dat, 
         file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_dat.rds"))

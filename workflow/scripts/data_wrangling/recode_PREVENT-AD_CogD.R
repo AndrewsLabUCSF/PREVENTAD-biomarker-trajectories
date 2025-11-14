@@ -3,6 +3,7 @@
 
 # Load files
 source('workflow/scripts/config.R')
+source(CRS_FN)
 
 clinical_raw <- readRDS(file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_clinical_imp_raw.rds"))
 lifestyle_raw <- readRDS(file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_lifestyle_imp_raw.rds"))
@@ -128,6 +129,13 @@ lifestyle_cogd <- lifestyle_exercise_cogd %>%
 dat_cogd <- clinical_cogd %>%
   left_join(lifestyle_cogd, by="CONP_ID")
 
+# Scoring
+dat_cogd_scored <- dat_cogd %>%
+  mutate(score_cogd = calculate_cogdrisk(.)) %>%
+  relocate(score_cogd, .after=CONP_ID) 
+
 # Save
 saveRDS(dat_cogd, 
         file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_cogd_dat.rds"))
+saveRDS(dat_cogd_scored, 
+        file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_cogd_scored_dat.rds"))

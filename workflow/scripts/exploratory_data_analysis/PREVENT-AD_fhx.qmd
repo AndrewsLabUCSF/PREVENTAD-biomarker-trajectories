@@ -16,11 +16,9 @@ source('workflow/scripts/config.R')
 source(CRS_FN)
 
 fhx_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_fhx_raw.rds"))
-lifestyle_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_lifestyle_raw.rds"))
+lifestyle_raw <- readRDS(file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_lifestyle_imp_raw.rds"))
+biomarkers <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_biomarkers.rds"))
 PREVENTAD_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_dat.rds"))
-
-ptau217_dat <- PREVENTAD_dat$plasma_ptau217
-ipms_dat <- PREVENTAD_dat$plasma_4plex
 ```
 
 # Coding extensive family history variable
@@ -75,78 +73,167 @@ dat_fhx <- fhx_raw %>%
   relocate(min_family_onset, .after=ext_relatives_AD) %>%
   relocate(fhx_burden, .after=min_family_onset)
 
-saveRDS(dat_fhx, file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_fhx_dat.rds"))
+#saveRDS(dat_fhx, file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_fhx_dat.rds"))
 ```
 
+# Family history table
+```{r}
 
-# Checking association of family history variable and biomarker levels
-## ptau217
+```
+
+# Checking association of family history burden and biomarker levels
+
+## Recoded family history variable vs biomarker levels
+
 ```{r}
 df1 <- dat_fhx %>%
-  left_join((ptau217_dat %>%
+  left_join((biomarkers %>%
                group_by(CONP_ID) %>%
                slice(1)),
-            by="CONP_ID") %>%
-  mutate(fhx_burden = as.numeric(fhx_burden))
-  # mutate(fhx_burden = factor(fhx_burden, 
-  #                            levels=c(1, 2, 3),
-  #                            labels=c("Low", "Moderate", "High")))
+            by="CONP_ID") 
+  
+df1_longer <- df1 %>%
+  pivot_longer(
+    cols = c(ptau181_simoa_UGOT, ptau217_simoa_UGOT, AB_ratio_simoa_4plex,
+             NFL_simoa_4plex, GFAP_simoa_4plex),
+    names_to = "biomarker",
+    values_to = "measure"
+  ) %>%
+  select(names(dat_fhx), biomarker, measure) %>%
+  mutate(fhx_burden = factor(fhx_burden,
+                             levels=c(1, 2, 3),
+                             labels=c("Low", "Moderate", "High"))) %>%
+  mutate(ext_relatives_AD = factor(ext_relatives_AD,
+                                   levels=c(0, 1),
+                                   labels=c("No", "Yes")))
 
-# df1_longer <- df1 %>%
-#   pivot_longer(
-#     cols=extensive_family_members_AD,
-#     names_to="num_extensive_family_members_AD",
-#     values_to="yesno"
-#   ) %>%
-#   mutate(yesno = as.factor(yesno))
+pval_df1 <- df1_longer %>%
+  group_by(biomarker) %>%
+  summarise(
+    p_value = tryCatch({
+      anova(lm(measure ~ fhx_burden))$`Pr(>F)`[1]
+    }, error = function(e) NA_real_),
+    .groups = "drop"
+  ) %>%
+  filter(!is.na(p_value)) %>%
+  mutate(p_label = case_when(
+    p_value < 0.001 ~ "p < 0.001",
+    p_value < 0.01 ~ paste0("p = ", round(p_value, 3)),
+    TRUE ~ paste0("p = ", round(p_value, 2))
+  ))
 
-ggplot(df1, aes(x=fhx_burden, y=ptau217_simoa_UGOT, fill=fhx_burden)) +
+plot1 <- ggplot(df1_longer, aes(x=fhx_burden, y=measure, fill=fhx_burden)) +
   geom_violin(alpha=0.7) +
   geom_boxplot(width=0.1, fill="white") +
-  stat_compare_means(
-    comparisons = list(c("Low", "Moderate"),
-                       c("Moderate", "High"),
-                       c("Low", "High")),
-    method="wilcox.test",
-    label.x=1.5
-  )
-
-lm1 <- lm(ptau217_simoa_UGOT ~ fhx_burden, data=df1)
-summary(lm1)
-
-cor.test(df1$other_family_members_AD, df1$ptau217_simoa_UGOT)
+  facet_wrap(~ biomarker, scales="free") +
+  # stat_compare_means(
+  #   comparisons = list(c("Low", "Moderate"),
+  #                      c("Moderate", "High"),
+  #                      c("Low", "High")),
+  #   method="t.test",
+  #   p.adjust.method = "bonferroni",
+  #   label.x=1.5,
+  #   size = 1.5
+  # ) +
+  geom_text(data = pval_df1,
+            aes(2, Inf, label = p_label),
+            vjust = 2,
+            size = 3,
+            inherit.aes = FALSE) +
+  # stat_compare_means(method="anova",
+  #                    #hjust=2,
+  #                    #vjust=2,
+  #                    size=3) +
+  labs(x = "Family History Burden Level",
+       y = "Biomarker Level (pg/mL or AB ratio)",
+       title = "Biomarker Levels by AD Family History Burden") +
+  theme(legend.position="none")
+plot1
 ```
 
+## Binary extended family members variable vs biomarker levels
 
-## Other biomarkers
 ```{r}
-df2 <- dat_fhx %>%
-  left_join((ipms_dat %>%
-               group_by(CONP_ID) %>%
-               slice(1)),
-            by="CONP_ID") %>%
-  mutate(fhx_burden = as.numeric(fhx_burden))
+pval_df2 <- df1_longer %>%
+  group_by(biomarker) %>%
+  summarise(
+    p_value = tryCatch({
+      anova(lm(measure ~ ext_relatives_AD))$`Pr(>F)`[1]
+    }, error = function(e) NA_real_),
+    .groups = "drop"
+  ) %>%
+  filter(!is.na(p_value)) %>%
+  mutate(p_label = case_when(
+    p_value < 0.001 ~ "p < 0.001",
+    p_value < 0.01 ~ paste0("p = ", round(p_value, 3)),
+    TRUE ~ paste0("p = ", round(p_value, 2))
+  ))
 
-df2_longer <- df2 %>%
-  pivot_longer(
-    cols=c(ptau181_simoa_UGOT, AB_ratio_simoa_4plex, NFL_simoa_4plex,
-           GFAP_simoa_4plex),
-    names_to="biomarker",
-    values_to="value"
-  ) 
-  # mutate(fhx_burden = factor(fhx_burden, 
-  #                            levels=c(1, 2, 3),
-  #                            labels=c("Low", "Moderate", "High")))
-
-ggplot(df2_longer, aes(x=fhx_burden, y=value, fill=fhx_burden)) +
+plot2 <- ggplot(df1_longer, aes(x=ext_relatives_AD, 
+                                y=measure, 
+                                fill=ext_relatives_AD)) +
   geom_violin(alpha=0.7) +
   geom_boxplot(width=0.1, fill="white") +
-  facet_wrap(~biomarker, scales="free") +
-  ggtitle("Extensive family history of AD vs biomarker levels (at first visit)")
+  facet_wrap(~ biomarker, scales="free") +
+  # stat_compare_means(
+  #   # comparisons = list(c("Low", "Moderate"),
+  #   #                    c("Moderate", "High"),
+  #   #                    c("Low", "High")),
+  #   method="wilcox.test",
+  #   #label.x=1.5,
+  #   size = 2
+  # ) + 
+  geom_text(data = pval_df2,
+            aes(1.5, Inf, label = p_label),
+            vjust = 2,
+            size = 3,
+            inherit.aes = FALSE) +
+  labs(x = "Extended Relatives with AD",
+       y = "Biomarker Level (pg/mL or AB ratio)",
+       title = "Biomarker Levels by AD in Extended Family") +
+  theme(legend.position="none")
+plot2
+```
 
-lm2 <- lm(AB_ratio_simoa_4plex ~ fhx_burden, data=df2)
-summary(lm2)
+## Number of extended family members with AD vs biomarker levels
 
-cor.test(df2$FDR_AD, df2$GFAP_simoa_4plex)
-# GFAP Pearson p-value: 0.02
+```{r}
+pval_df3 <- df1_longer %>%
+  group_by(biomarker) %>%
+  summarise(
+    p_value = tryCatch({
+      anova(lm(measure ~ other_family_members_AD))$`Pr(>F)`[1]
+    }, error = function(e) NA_real_),
+    .groups = "drop"
+  ) %>%
+  filter(!is.na(p_value)) %>%
+  mutate(p_label = case_when(
+    p_value < 0.001 ~ "p < 0.001",
+    p_value < 0.01 ~ paste0("p = ", round(p_value, 3)),
+    TRUE ~ paste0("p = ", round(p_value, 2))
+  ))
+
+plot3 <- ggplot(df1_longer, aes(x=as.factor(other_family_members_AD), 
+                                y=measure, 
+                                fill=as.factor(other_family_members_AD))) +
+  geom_boxplot(alpha=0.7) +
+  facet_wrap(~ biomarker, scales="free") +
+  # stat_compare_means(
+  #   # comparisons = list(c("Low", "Moderate"),
+  #   #                    c("Moderate", "High"),
+  #   #                    c("Low", "High")),
+  #   method="wilcox.test",
+  #   #label.x=1.5,
+  #   size = 2
+  # ) + 
+  geom_text(data = pval_df3,
+            aes(4, Inf, label = p_label),
+            vjust = 2,
+            size = 3,
+            inherit.aes = FALSE) +
+  labs(x = "# of Extended Relatives with AD",
+       y = "Biomarker Level (pg/mL or AB ratio)",
+       title = "Biomarker Levels by AD in Extended Family") +
+  theme(legend.position="none")
+plot3
 ```

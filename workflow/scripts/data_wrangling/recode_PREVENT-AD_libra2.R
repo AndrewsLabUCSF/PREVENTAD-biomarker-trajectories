@@ -3,6 +3,7 @@
 
 # Load files
 source('workflow/scripts/config.R')
+source(CRS_FN)
 
 clinical_raw <- readRDS(file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_clinical_imp_raw.rds"))
 lifestyle_raw <- readRDS(file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_lifestyle_imp_raw.rds"))
@@ -56,7 +57,7 @@ dat_libra <- clinical_raw %>%
   # 1 == lowest tertile
   mutate(Social_activity_total = rowSums(select(., social_life_frequency_activities:social_life_frequency_phone_calls)),
          Social_activity_holder = ntile(Social_activity_total, 3),
-         Social_activity = if_else(Social_activity_holder == 1, 1, 0)) %>%
+         Social_participation = if_else(Social_activity_holder == 1, 1, 0)) %>%
   
   relocate(Sleep_disturbances, .after=CONP_ID) %>%
   relocate(Hypertension, .after=Diastolic_blood_pressure) %>%
@@ -132,19 +133,26 @@ exercise_libra <- exercise_libra %>%
     meets_vigorous_guideline = vigorous_minutes_week >= 60,
     
     # LIBRA physical activity (1 = risk factor present, 0 = absent)
-    Physical_inactivity = case_when(
+    Physical_activity = case_when(
       # If any guideline is met, no risk (0)
       meets_moderate_guideline | meets_vigorous_guideline ~ 0,
       # If no guideline is met, risk present (1)
       TRUE ~ 1
     )
   ) %>%
-  select(CONP_ID, Physical_inactivity)
+  select(CONP_ID, Physical_activity)
 
 # Merge
 dat_libra <- dat_libra %>%
   left_join(exercise_libra, by="CONP_ID")
 
+# Scoring
+dat_libra_scored <- dat_libra %>%
+  mutate(score_libra2 = calculate_libra2(.)) %>%
+  relocate(score_libra2, .after=CONP_ID) 
+
 # Save
 saveRDS(dat_libra, 
-        file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_libra_dat.rds"))
+        file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_libra_imp_dat.rds"))
+saveRDS(dat_libra_scored, 
+        file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_libra_scored_dat.rds"))
