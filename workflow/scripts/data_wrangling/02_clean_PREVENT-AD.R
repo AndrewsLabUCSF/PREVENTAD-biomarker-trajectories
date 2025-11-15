@@ -5,18 +5,45 @@
 source('workflow/scripts/config.R')
 
 library(missForest)
+library(rxnorm)
+library(pharm)
 
 clinical_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_clinical_raw.rds"))
 lifestyle_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_lifestyle_raw.rds"))
 
 
 # MEDICATION --------------------------------------------------------------
-# only need to look for antihypertensivse, antidiabetics, and antidepressants
-meduse <- clinical_raw %>%
-  select(CONP_ID, SU_medication, PRN_medication) %>%
-  separate_rows(SU_medication, sep=";") %>%
-  separate_rows(PRN_medication, sep=";")
+# only need to look for antihypertensives, antidiabetics, antihyperlipidemic, and antidepressants
+antihypertensives <- getRxCuiViaMayTreat("hypertension")
+antidiabetics <- getRxCuiViaMayTreat("diabetes")
+antihyperlipidemic <- getRxCuiViaMayTreat("hypercholesterolemia")
+antidepressants <- getRxCuiViaMayTreat("depressive")
+supplements <- data.frame(
+  RxCui = c("4419", "21406", "1895", "318224", "11416", "6574"),
+  name = c("fish oil", "coqenzyme q10", "calcium", "flax seed oil", "zinc", "magnesium")
+)
 
+meduse <- clinical_raw %>%
+  select(CONP_ID, SU_medication) %>%
+  separate_rows(SU_medication, sep=";") %>%
+  mutate(SU_medication = if_else(SU_medication == "other SU medication(s)", NA, SU_medication)) %>%
+  rowwise() %>%
+  mutate(SU_rxcui = find_approx_rxcui(SU_medication),
+         trt_type = case_when(SU_rxcui %in% antihypertensives$RxCui & !(SU_rxcui %in% supplements$RxCui) ~ "antihypertensive",
+                              SU_rxcui %in% antidiabetics$RxCui & !(SU_rxcui %in% supplements$RxCui) ~ "antidiabetic",
+                              SU_rxcui %in% antihyperlipidemic$RxCui & !(SU_rxcui %in% supplements$RxCui) ~ "antihyperlipidemic",
+                              SU_rxcui %in% antidepressants$RxCui & !(SU_rxcui %in% supplements$RxCui) ~ "antidepressants",
+                              TRUE ~ NA),
+         trt_yn = if_else(is.na(trt_type), 0, 1)) %>%
+  pivot_wider(names_from=trt_type, values_from=trt_yn, names_glue="medusage_{trt_type}") %>%
+  select(CONP_ID, starts_with("medusage_anti")) %>%
+  group_by(CONP_ID) %>%
+  fill(medusage_antihyperlipidemic:medusage_antidepressants, .direction="updown") %>%
+  distinct() %>%
+  replace(is.na(.), 0)
+
+# Save medication dataset
+saveRDS(meduse, file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_meduse.rds"))
 
 
 # MISSING DATA IMPUTATION -------------------------------------------------
@@ -51,20 +78,6 @@ clinical_imp_raw[names(clinical_imp_mf_dat)] <- clinical_imp_mf_dat
 lifestyle_imp_raw <- lifestyle_raw
 lifestyle_imp_raw[names(lifestyle_imp_mf_dat)] <- lifestyle_imp_mf_dat
 
-# cogd_dat_imp <- prepare_preventad_cogdrisk(clinical_imp_raw,
-#                                            lifestyle_imp_raw)
-# saveRDS(cogd_dat_imp, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_cogd_imp_raw.rds"))
+# Save cleaned datasets
 saveRDS(clinical_imp_raw, file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_clinical_imp_raw.rds"))
 saveRDS(lifestyle_imp_raw, file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_lifestyle_imp_raw.rds"))
-
-# cogd_dat_imp_scored <- cogd_dat_imp %>% 
-#   select(-c(Education_years, BMI, LDL_value)) %>%
-#   mutate(num_cogdrisk_vars = (rowSums(!is.na(.))) - 1) %>%
-#   mutate(complete_scores = complete.cases(.)) %>%
-#   mutate(score = calculate_cogdrisk(.)) %>%
-#   relocate(score, .after=CONP_ID) %>%
-#   relocate(complete_scores, .after=score) %>%
-#   relocate(num_cogdrisk_vars, .after=complete_scores) %>%
-#   select(-complete_scores, -num_cogdrisk_vars)
-# 
-# saveRDS(cogd_dat_imp_scored, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_cogd_imp_scored.rds"))
