@@ -1,4 +1,9 @@
 data/
 
+.DS_Store
+
 .Rhistory
 .RData
+
+results/.DS_Store
+results/EDA/.DS_Store
