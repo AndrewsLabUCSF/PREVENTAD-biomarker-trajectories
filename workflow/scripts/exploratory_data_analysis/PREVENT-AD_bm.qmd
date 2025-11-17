@@ -34,10 +34,10 @@ baseline_dat <- fhx %>%
                select(CONP_ID, GRS)),
             by="CONP_ID") %>%
   left_join((cogd_dat %>% 
-               select(CONP_ID, score_cogd=score)),
+               select(CONP_ID, score_cogd)),
             by="CONP_ID") %>%
   left_join((libra_dat %>% 
-               select(CONP_ID, score_libra2=score)),
+               select(CONP_ID, score_libra2)),
             by="CONP_ID") %>%
   select(CONP_ID, score_cogd, score_libra2, GRS, Candidate_Age, Sex,
          Education_years, ptau181_simoa_UGOT, ptau217_simoa_UGOT, AB_ratio_simoa_4plex, 
@@ -237,12 +237,13 @@ plot5 <- baseline_dat %>%
   facet_wrap(~biomarker, scales="free") + 
   labs(x = "CogDrisk Score",
        y = "Biomarker Level (pg/mL or AB ratio)",
-       title = "CogDrisk Score and AD Blood-based Biomarker Levels in PREVENT-AD") +
+       title = "CogDrisk Score and AD Blood-based Biomarker Levels in PREVENT-AD",
+       subtitle = "ANOVA p-value") +
   theme_minimal() +
   theme(legend.position = "bottom") 
 plot5
 
-ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_CogD_vs_BBM.png"), plot5)
+# ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_CogD_vs_BBM.png"), plot5)
 ```
 
 
@@ -252,7 +253,7 @@ pval_df3 <- baseline_dat %>%
   group_by(biomarker) %>%
   summarise(
     p_value = tryCatch({
-      anova(lm(measure ~ score_libra2 + Candidate_Age + Sex + Education_years))$`Pr(>F)`[1]
+      anova(lm(measure ~ score_libra2))$`Pr(>F)`[1]
     }, error = function(e) NA_real_),
     .groups = "drop"
   ) %>%
@@ -276,11 +277,11 @@ plot6 <- baseline_dat %>%
   labs(x = "LIBRA2 Score",
        y = "Biomarker Level (pg/mL or AB ratio)",
        title = "LIBRA2 Score and AD Blood-based Biomarker Levels in PREVENT-AD",
-       subtitle = "ANOVA p-value for sex, age, and education years") +
+       subtitle = "ANOVA p-value") +
   theme_minimal() +
   theme(legend.position = "bottom") 
 plot6
 
-#ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_LIBRA2_vs_BBM.png"), plot6)
+# ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_LIBRA2_vs_BBM.png"), plot6)
 ```
 
