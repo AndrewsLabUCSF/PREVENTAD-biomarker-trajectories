@@ -7,33 +7,65 @@ source(CRS_FN)
 
 clinical_raw <- readRDS(file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_clinical_imp_raw.rds"))
 lifestyle_raw <- readRDS(file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_lifestyle_imp_raw.rds"))
-
+meduse <- readRDS(file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_meduse.rds"))
 
 ## RECODING ---------------------------------------------------------------
 clinical_cogd <- clinical_raw %>%
+  left_join(meduse, by="CONP_ID") %>%
+  left_join((lifestyle_raw %>% select(CONP_ID, gds_score, epworth_score, pittsburgh_total_score)),
+            by="CONP_ID") %>%
   mutate(
     Sex = if_else(Sex == "Female", 0, 1) %>% factor(), # female == 0, male == 1
     Age = Candidate_Age/12,
-    Education_level = case_when(Education_years > 11 ~ "High",
-                                Education_years > 8 & Education_years <= 11 ~ "Middle",
-                                Education_years < 8 ~ "Low",
-                                TRUE ~ NA) %>% factor(),
-    Hypertension = if_else(Systolic_blood_pressure > 129 | Diastolic_blood_pressure >= 80,
-                           1, 0) %>% factor(),
+    Education_level = case_when(
+      Education_years > 11 ~ "High",
+      Education_years > 8 & Education_years <= 11 ~ "Middle",
+      Education_years < 8 ~ "Low",
+      TRUE ~ NA) %>% factor(),
+    
+    # Hypertension risk factor present == 1
+    Hypertension = case_when(
+      medusage_antihypertensive == 1 ~ 1,
+      Systolic_blood_pressure > 129 ~ 1,
+      Diastolic_blood_pressure >= 80 ~ 1,
+      medusage_antihypertensive == 0 & !is.na(Systolic_blood_pressure) & !is.na(Diastolic_blood_pressure) ~ 0,
+      TRUE ~ NA) %>% factor(),
+    
     BMI = Weight/(Height/100)^2,
-    BMI_category = case_when(BMI < 18.5 ~ "Underweight",
-                             BMI > 18.5 & BMI < 25 ~ "Normal",
-                             BMI >= 25 & BMI < 30 ~ "Overweight",
-                             BMI >= 30 ~ "Obese",
-                             TRUE ~ NA) %>% factor(),
-    High_cholesterol = if_else(total_cholesterol_value > 6.5, 1, 0) %>% factor(), # high == 1
-    Depression = past_depression %>% factor(),
+    BMI_category = case_when(
+      BMI < 18.5 ~ "Underweight",
+      BMI > 18.5 & BMI < 25 ~ "Normal",
+      BMI >= 25 & BMI < 30 ~ "Overweight",
+      BMI >= 30 ~ "Obese",
+      TRUE ~ NA) %>% factor(),
+    
+    # High cholesterol risk factor present == 1
+    High_cholesterol = if_else(total_cholesterol_value > 6.5, 1, 0) %>% factor(), 
+    
+    # Insomnia risk factor present == 1
+    Insomnia = if_else(
+      epworth_score >= 10 & pittsburgh_total_score > 5, 1, 0
+      ),
+    
+    # Depression risk factor present == 1
+    Depression = case_when(
+      past_depression == 1 ~ 1,
+      medusage_antidepressants == 1 ~ 1,
+      gds_score >= 5 ~ 1,
+      past_depression == 0 & medusage_antidepressants == 0 ~ 0,
+      TRUE ~ NA) %>% factor(),
     Atrial_fibrillation = past_atrial_fibrillation %>% factor(),
-    Diabetes = case_when(treatment_diabetes > 0 ~ 1,
-                         Age < 60 & hba1c_value <= 0.061 ~ 0,
-                         (Age >= 60 & Age < 70) & hba1c_value <= 0.075 ~ 0,
-                         Age >= 70 & hba1c_value <= 0.07 ~ 0,
-                         TRUE ~ 1) %>% factor(),
+    
+    # Diabetes risk factor present == 1
+    Diabetes = case_when(
+      treatment_diabetes > 0 ~ 1,
+      medusage_antidiabetic == 1 ~ 1,
+      Age < 60 & treatment_diabetes == 0 & hba1c_value <= 0.061 ~ 0,
+      (Age >= 60 & Age < 70) & hba1c_value <= 0.075 & treatment_diabetes == 0 ~ 0,
+      Age >= 70 & treatment_diabetes == 0 & hba1c_value <= 0.07 ~ 0,
+      is.na(treatment_diabetes) & is.na(medusage_antidiabetic) & is.na(hba1c_value) ~ NA,
+      TRUE ~ 1) %>% factor(),
+    
     TBI = if_else(head_injury_hospitalized == 1 | head_injury_severe == 1,
                   1, 0) %>% factor()) %>%
   relocate(Age, .after=Sex) %>%
@@ -47,8 +79,10 @@ clinical_cogd <- clinical_raw %>%
   relocate(Diabetes, .after=treatment_diabetes) %>%
   select(-c(Candidate_Age, Systolic_blood_pressure, Diastolic_blood_pressure,
             Height, Weight, total_cholesterol_value, past_depression,
-            past_atrial_fibrillation, treatment_diabetes, hba1c_value,
-            head_injury_hospitalized, head_injury_severe))
+            past_atrial_fibrillation, hba1c_value, head_injury_hospitalized, 
+            head_injury_severe, starts_with("medusage_"), starts_with("treatment_"),
+            ends_with("medication"), diagnosed_impairment, epworth_score,
+            gds_score, pittsburgh_total_score))
 
 
 lifestyle_cogd <- lifestyle_raw %>%

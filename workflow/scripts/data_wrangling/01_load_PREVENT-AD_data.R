@@ -103,8 +103,8 @@ lifestyle_raw <- PREVENTAD_dat$demographics %>%
               slice(1)),
             by="CONP_ID") %>%
   left_join((PREVENTAD_dat$questionnaire) %>%
-              select(CONP_ID, pittsburgh_total_score) %>%
-              filter(!is.na(pittsburgh_total_score)) %>%
+              select(CONP_ID, pittsburgh_total_score, epworth_score) %>%
+              filter(!is.na(pittsburgh_total_score) & !is.na(epworth_score)) %>%
               group_by(CONP_ID) %>%
               slice(1),
             by="CONP_ID") %>%

@@ -7,44 +7,71 @@ source(CRS_FN)
 
 clinical_raw <- readRDS(file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_clinical_imp_raw.rds"))
 lifestyle_raw <- readRDS(file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_lifestyle_imp_raw.rds"))
+meduse <- readRDS(file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_meduse.rds"))
 
 
 # RECODING ----------------------------------------------------------------
 dat_libra <- clinical_raw %>%
-  select(CONP_ID, Systolic_blood_pressure, Diastolic_blood_pressure, total_cholesterol_value, 
-         LDL_value, Height, Weight, hba1c_value, treatment_diabetes, treatment_hypertension,
-         treatment_hyperlipidemia, past_depression, diagnosed_impairment) %>%
+  # select(CONP_ID, Systolic_blood_pressure, Diastolic_blood_pressure, total_cholesterol_value, 
+  #        LDL_value, Height, Weight, hba1c_value, treatment_diabetes, treatment_hypertension,
+  #        treatment_hyperlipidemia, past_depression, diagnosed_impairment) %>%
   left_join((lifestyle_raw %>%
                select(CONP_ID, smoking_present, epoch_score_currently, pittsburgh_total_score,
                       social_life_frequency_activities:social_life_frequency_phone_calls,
                       gds_score)),
             by="CONP_ID") %>%
+  left_join(meduse, by="CONP_ID") %>%
   mutate(
+    Age = Candidate_Age/12,
     # Sleep disturbances:
     # 1 == highest tertile
     Sleep_disturbances_holder = ntile(pittsburgh_total_score, 3),
     Sleep_disturbances = if_else(Sleep_disturbances_holder == 3, 1, 0),
     
-    Hypertension = if_else(
-      Systolic_blood_pressure >= 140 | Diastolic_blood_pressure >= 90 | treatment_hypertension == 2, 1, 0),
+    # Hypertension risk factor present == 1
+    Hypertension = case_when(
+      Systolic_blood_pressure >= 140 ~ 1,
+      Diastolic_blood_pressure >= 90 ~ 1,
+      treatment_hypertension == 1 | treatment_hypertension == 2 ~ 1,
+      medusage_antihypertensive == 1 ~ 1,
+      is.na(Systolic_blood_pressure) & is.na(Diastolic_blood_pressure) & is.na(treatment_hypertension) & is.na(medusage_antihypertensive) ~ NA,
+      TRUE ~ 0
+    ),
     
     # Hypercholesterolemia
     # 1 == TC >= 6.2 or currently treating hyperlipidemia
-    Hypercholesterolemia = if_else(
-      total_cholesterol_value >= 6.2 | treatment_hyperlipidemia == 2, 1, 0),
+    Hypercholesterolemia = case_when(
+      total_cholesterol_value >= 6.2 ~ 1,
+      treatment_hyperlipidemia == 1 | treatment_hyperlipidemia == 2 ~ 1,
+      medusage_antihyperlipidemic == 1 ~ 1,
+      is.na(total_cholesterol_value) & is.na(treatment_hyperlipidemia) & is.na(medusage_antihyperlipidemic) ~ NA,
+      TRUE ~ 0
+    ),
+    
     BMI = Weight/(Height/100)^2,
     Obesity = if_else(BMI >= 30, 1, 0),
     
     # Hearing impairment:
     # 1 == yes 
     Hearing_impairment = if_else(diagnosed_impairment != 0, 1, 0),
-    Diabetes = case_when(treatment_diabetes > 0 ~ 1,
-                         hba1c_value >= 0.065 ~ 1,
-                         TRUE ~ 0),
+    
+    Diabetes = case_when(
+      treatment_diabetes > 0 ~ 1,
+      medusage_antidiabetic == 1 ~ 1,
+      Age < 60 & treatment_diabetes == 0 & hba1c_value <= 0.061 ~ 0,
+      (Age >= 60 & Age < 70) & hba1c_value <= 0.075 & treatment_diabetes == 0 ~ 0,
+      Age >= 70 & treatment_diabetes == 0 & hba1c_value <= 0.07 ~ 0,
+      is.na(treatment_diabetes) & is.na(medusage_antidiabetic) & is.na(hba1c_value) ~ NA,
+      TRUE ~ 1) %>% factor(),
     
     # Depression
     # 1 == yes
-    Depression = if_else(past_depression == 1 | gds_score >= 5, 1, 0),
+    Depression = case_when(past_depression == 1 ~ 1,
+                           medusage_antidepressants == 1 ~ 1,
+                           gds_score >= 5 ~ 1, 
+                           past_depression == 0 & medusage_antidepressants == 0 ~ 0,
+                           TRUE ~ NA) %>% factor(),
+    
     Smoking = if_else(as.numeric(smoking_present) >= 3, 1, 0),
     Cognitive_activity_holder = ntile(epoch_score_currently, 3),
     
@@ -68,12 +95,8 @@ dat_libra <- clinical_raw %>%
   relocate(Hearing_impairment, .after=Obesity) %>%
   relocate(Smoking, .after=Hearing_impairment) %>%
   relocate(Depression, .after=Smoking) %>%
-  select(-c(Systolic_blood_pressure, Diastolic_blood_pressure, total_cholesterol_value, 
-            LDL_value, Height, Weight, BMI, hba1c_value, treatment_diabetes, treatment_hypertension,
-            past_depression, smoking_present, epoch_score_currently, pittsburgh_total_score,
-            Sleep_disturbances_holder, Cognitive_activity_holder, Social_activity_total,
-            Social_activity_holder, social_life_frequency_activities:social_life_frequency_phone_calls,
-            diagnosed_impairment, treatment_hyperlipidemia, gds_score))
+  select(CONP_ID, Sleep_disturbances, Hypertension, Hypercholesterolemia, Obesity, 
+         Hearing_impairment, Diabetes, Depression, Smoking, Cognitive_activity, Social_participation)
 
 
 ## Recoding exercise columns
