@@ -10,6 +10,7 @@ library(pharm)
 
 clinical_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_clinical_raw.rds"))
 lifestyle_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_lifestyle_raw.rds"))
+fhx_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_fhx_raw.rds"))
 
 
 # MEDICATION --------------------------------------------------------------
@@ -44,6 +45,70 @@ meduse <- clinical_raw %>%
 
 # Save medication dataset
 saveRDS(meduse, file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_meduse.rds"))
+
+
+# FAMILY HISTORY ----------------------------------------------------------
+dat_fhx <- fhx_raw %>%
+  rowwise() %>%
+  mutate(FDR_AD = sum(father_dx_ad_dementia, 
+                      mother_dx_ad_dementia, 
+                      sibling_dx_ad_dementia_count, na.rm=TRUE),
+         other_family_members_AD = if_else(is.na(other_family_members_AD), 
+                                           0, 
+                                           other_family_members_AD),
+         other_maternal_family_members_AD = if_else(is.na(other_maternal_family_members_AD), 
+                                                    0, 
+                                                    other_maternal_family_members_AD),
+         other_paternal_family_members_AD = if_else(is.na(other_paternal_family_members_AD), 
+                                                    0, 
+                                                    other_paternal_family_members_AD),
+         # binary: extensive fhx AD == 1; no extensive fhx AD == 0
+         ext_relatives_AD = if_else(other_family_members_AD > 0, 1, 0),
+         
+         # earliest age of onset
+         min_family_onset = pmin(
+           father_onset_age,
+           mother_onset_age,
+           sibling_onset_age_1,  
+           sibling_onset_age_2,
+           sibling_onset_age_3,
+           na.rm = TRUE
+         ),
+         
+         # single comprehensive fhx variable
+         fhx_burden = case_when(
+           # 3 = high
+           FDR_AD >= 3 ~ 3,
+           FDR_AD >= 2 & !is.na(min_family_onset) & min_family_onset < 65 ~ 3,
+           !is.na(min_family_onset) & min_family_onset < 60 ~ 3,
+           
+           # 2 = moderate
+           FDR_AD >= 2 ~ 2,
+           !is.na(min_family_onset) & min_family_onset >= 60 & min_family_onset < 65 ~ 2,
+           
+           # 1 = low
+           FDR_AD == 1 ~ 1
+         ) %>% as.factor(),
+         
+         FDRAD_1ormore = if_else(FDR_AD == 1, 1, 2),
+         FDR_ext_AD = case_when(
+           var1 == 1 & ext_relatives_AD == 0 ~ 1,
+           var1 == 1 & ext_relatives_AD == 1 ~ 2,
+           var1 == 2 & ext_relatives_AD == 0 ~ 3,
+           var1 == 2 & ext_relatives_AD == 1 ~ 4,
+           TRUE ~ NA
+         ) %>% as.factor()
+  ) %>%
+  relocate(FDR_AD, .after=CONP_ID) %>%
+  relocate(other_family_members_AD, .after=FDR_AD) %>%
+  relocate(other_maternal_family_members_AD, .after=other_family_members_AD) %>%
+  relocate(other_paternal_family_members_AD, .after=other_maternal_family_members_AD) %>%
+  relocate(ext_relatives_AD, .after=FDR_AD) %>%
+  relocate(min_family_onset, .after=ext_relatives_AD) %>%
+  relocate(fhx_burden, .after=min_family_onset)
+
+# Save dataset
+saveRDS(dat_fhx, file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_fhx_dat.rds"))
 
 
 # MISSING DATA IMPUTATION -------------------------------------------------

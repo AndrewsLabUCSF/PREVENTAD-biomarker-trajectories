@@ -10,81 +10,28 @@ knitr::opts_knit$set(root.dir = here::here())
 
 ```{r setting}
 library(ggpubr)
-library(missForest)
 
 source('workflow/scripts/config.R')
 source(CRS_FN)
 
-fhx_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_fhx_raw.rds"))
-lifestyle_raw <- readRDS(file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_lifestyle_imp_raw.rds"))
+dat_fhx <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_fhx_raw.rds"))
 biomarkers <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_biomarkers.rds"))
 PREVENTAD_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_dat.rds"))
 ```
 
-# Coding extensive family history variable
+# Family history histograms
 ```{r}
-dat_fhx <- fhx_raw %>%
-  rowwise() %>%
-  mutate(FDR_AD = sum(father_dx_ad_dementia, 
-                                 mother_dx_ad_dementia, 
-                                 sibling_dx_ad_dementia_count, na.rm=TRUE),
-         other_family_members_AD = if_else(is.na(other_family_members_AD), 
-                                           0, 
-                                           other_family_members_AD),
-         other_maternal_family_members_AD = if_else(is.na(other_maternal_family_members_AD), 
-                                                    0, 
-                                                    other_maternal_family_members_AD),
-         other_paternal_family_members_AD = if_else(is.na(other_paternal_family_members_AD), 
-                                                    0, 
-                                                    other_paternal_family_members_AD),
-         # binary: extensive fhx AD == 1; no extensive fhx AD == 0
-         ext_relatives_AD = if_else(other_family_members_AD > 0, 1, 0),
-         
-         # earliest age of onset
-         min_family_onset = pmin(
-           father_onset_age,
-           mother_onset_age,
-           sibling_onset_age_1,  
-           sibling_onset_age_2,
-           sibling_onset_age_3,
-           na.rm = TRUE
-           ),
-         
-         # single comprehensive fhx variable
-         fhx_burden = case_when(
-           # 3 = high
-           FDR_AD >= 3 ~ 3,
-           FDR_AD >= 2 & !is.na(min_family_onset) & min_family_onset < 65 ~ 3,
-           !is.na(min_family_onset) & min_family_onset < 60 ~ 3,
-           
-           # 2 = moderate
-           FDR_AD >= 2 ~ 2,
-           !is.na(min_family_onset) & min_family_onset >= 60 & min_family_onset < 65 ~ 2,
-           
-           # 1 = low
-           FDR_AD == 1 ~ 1
-           ) %>% as.factor()
-         ) %>%
-  relocate(FDR_AD, .after=CONP_ID) %>%
-  relocate(other_family_members_AD, .after=FDR_AD) %>%
-  relocate(other_maternal_family_members_AD, .after=other_family_members_AD) %>%
-  relocate(other_paternal_family_members_AD, .after=other_maternal_family_members_AD) %>%
-  relocate(ext_relatives_AD, .after=FDR_AD) %>%
-  relocate(min_family_onset, .after=ext_relatives_AD) %>%
-  relocate(fhx_burden, .after=min_family_onset)
+hist1 <- ggplot(dat_fhx, aes(x=var2)) +
+  geom_histogram(binwidth=1, stat="count")
+hist1
 
-#saveRDS(dat_fhx, file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_fhx_dat.rds"))
-```
-
-# Family history table
-```{r}
-
+hist2 <- ggplot(dat_fhx, aes(x=other_family_members_AD)) +
+  geom_histogram(binwidth=1)
+hist2
 ```
 
 # Checking association of family history burden and biomarker levels
-
 ## Recoded family history variable vs biomarker levels
-
 ```{r}
 df1 <- dat_fhx %>%
   left_join((biomarkers %>%
@@ -105,7 +52,14 @@ df1_longer <- df1 %>%
                              labels=c("Low", "Moderate", "High"))) %>%
   mutate(ext_relatives_AD = factor(ext_relatives_AD,
                                    levels=c(0, 1),
-                                   labels=c("No", "Yes")))
+                                   labels=c("No", "Yes"))) %>%
+  mutate(FDRAD_1ormore = factor(FDRAD_1ormore,
+                       levels=c(1, 2),
+                       labels=c("1 FDR",
+                                "2+ FDR"))) %>%
+  mutate(FDR_ext_AD = factor(FDR_ext_AD,
+                       levels=c(1, 2, 3, 4),
+                       labels=c("1 FDR", "1 FDR + ext", "2+ FDR", "2+ FDR + ext")))
 
 pval_df1 <- df1_longer %>%
   group_by(biomarker) %>%
@@ -149,10 +103,12 @@ plot1 <- ggplot(df1_longer, aes(x=fhx_burden, y=measure, fill=fhx_burden)) +
        title = "Biomarker Levels by AD Family History Burden") +
   theme(legend.position="none")
 plot1
+
+#ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_fhx_vs_BBM_var1.png"), plot1)
 ```
 
-## Binary extended family members variable vs biomarker levels
 
+## Binary extended family members variable vs biomarker levels
 ```{r}
 pval_df2 <- df1_longer %>%
   group_by(biomarker) %>%
@@ -193,10 +149,11 @@ plot2 <- ggplot(df1_longer, aes(x=ext_relatives_AD,
        title = "Biomarker Levels by AD in Extended Family") +
   theme(legend.position="none")
 plot2
+
+# ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_fhx_vs_BBM_var2.png"), plot2)
 ```
 
 ## Number of extended family members with AD vs biomarker levels
-
 ```{r}
 pval_df3 <- df1_longer %>%
   group_by(biomarker) %>%
@@ -236,4 +193,101 @@ plot3 <- ggplot(df1_longer, aes(x=as.factor(other_family_members_AD),
        title = "Biomarker Levels by AD in Extended Family") +
   theme(legend.position="none")
 plot3
+
+# ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_fhx_vs_BBM_var3.png"), plot3)
+```
+
+
+## 1 vs 2+ FDR and BBM
+```{r}
+pval_df4 <- df1_longer %>%
+  group_by(biomarker) %>%
+  summarise(
+    p_value = tryCatch({
+      anova(lm(measure ~ FDRAD_1ormore))$`Pr(>F)`[1]
+    }, error = function(e) NA_real_),
+    .groups = "drop"
+  ) %>%
+  filter(!is.na(p_value)) %>%
+  mutate(p_label = case_when(
+    p_value < 0.001 ~ "p < 0.001",
+    p_value < 0.01 ~ paste0("p = ", round(p_value, 3)),
+    TRUE ~ paste0("p = ", round(p_value, 2))
+  ))
+
+plot4 <- ggplot(df1_longer, aes(x=as.factor(FDRAD_1ormore), 
+                                y=measure, 
+                                fill=as.factor(FDRAD_1ormore))) +
+  geom_violin(alpha=0.7) +
+  geom_boxplot(width=0.1, fill="white") +
+  facet_wrap(~ biomarker, scales="free") +
+  # stat_compare_means(
+  #   # comparisons = list(c("Low", "Moderate"),
+  #   #                    c("Moderate", "High"),
+  #   #                    c("Low", "High")),
+  #   method="wilcox.test",
+  #   #label.x=1.5,
+  #   size = 2
+  # ) + 
+  geom_text(data = pval_df4,
+            aes(Inf, Inf, label = p_label),
+            vjust = 2,
+            hjust = 1,
+            size = 3,
+            inherit.aes = FALSE) +
+  labs(x = "FDR AD",
+       y = "Biomarker Level (pg/mL or AB ratio)",
+       title = "Biomarker Levels by Number of FDR with AD") +
+  theme(legend.position="none")
+plot4
+
+# ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_fhx_vs_BBM_var4.png"), plot4)
+```
+
+
+## 1 vs 2+ FDR + extended family members with AD and BBM
+```{r}
+pval_df5 <- df1_longer %>%
+  group_by(biomarker) %>%
+  summarise(
+    p_value = tryCatch({
+      anova(lm(measure ~ FDR_ext_AD))$`Pr(>F)`[1]
+    }, error = function(e) NA_real_),
+    .groups = "drop"
+  ) %>%
+  filter(!is.na(p_value)) %>%
+  mutate(p_label = case_when(
+    p_value < 0.001 ~ "p < 0.001",
+    p_value < 0.01 ~ paste0("p = ", round(p_value, 3)),
+    TRUE ~ paste0("p = ", round(p_value, 2))
+  ))
+
+plot5 <- ggplot(df1_longer, aes(x=as.factor(FDR_ext_AD), 
+                                y=measure, 
+                                fill=as.factor(FDR_ext_AD))) +
+  geom_violin(alpha=0.7) +
+  geom_boxplot(width=0.1, fill="white") +
+  facet_wrap(~ biomarker, scales="free") +
+  # stat_compare_means(
+  #   # comparisons = list(c("Low", "Moderate"),
+  #   #                    c("Moderate", "High"),
+  #   #                    c("Low", "High")),
+  #   method="wilcox.test",
+  #   #label.x=1.5,
+  #   size = 2
+  # ) + 
+  geom_text(data = pval_df5,
+            aes(Inf, Inf, label = p_label),
+            vjust = 2,
+            hjust = 1,
+            size = 3,
+            inherit.aes = FALSE) +
+  labs(x = "Family History AD",
+       y = "Biomarker Level (pg/mL or AB ratio)",
+       title = "Biomarker Levels by FDR + Extended Family Members with AD") +
+  theme(legend.position="none",
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+plot5
+
+ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_fhx_vs_BBM_var5.png"), plot5)
 ```
