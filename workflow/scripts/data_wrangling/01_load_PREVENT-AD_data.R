@@ -81,6 +81,12 @@ PREVENTAD_dat$family_history <- PREVENTAD_dat$demographics %>%
 
 fhx_raw <- PREVENTAD_dat$family_history
 
+# Diagnosis
+diagnosis <- clinical_raw %>%
+  select(CONP_ID) %>%
+  left_join(PREVENTAD_dat$diagnosis, by="CONP_ID") %>%
+  mutate(Clinical_diagnosis = if_else(is.na(Clinical_diagnosis), "CN", Clinical_diagnosis)) %>%
+  select(-CONP_CandID)
 
 # Lifestyle table
 lifestyle_raw <- PREVENTAD_dat$demographics %>%
@@ -178,6 +184,8 @@ saveRDS(fhx_raw,
          file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_fhx_raw.rds"))
 saveRDS(genetics,
         file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_genetics.rds"))
+saveRDS(diagnosis,
+        file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_diagnosis.rds"))
 saveRDS(PREVENTAD_dat$GWAS,
         file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_GWAS.rds"))
 saveRDS(apoe,

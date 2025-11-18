@@ -1,6 +1,7 @@
 
 # LOAD PACKAGES -----------------------------------------------------------
-pacman::p_load(tidyr, dplyr, ggplot2, gtsummary, gt, here, tidyverse, data.table)
+pacman::p_load(tidyr, dplyr, ggplot2, gtsummary, gt, here, tidyverse, data.table,
+               lubridate)
 
 
 # FUNCTIONS ---------------------------------------------------------------
@@ -16,6 +17,11 @@ CRS_FN <- file.path(FUNCTIONS_PATH, "CRS.R")
 EDA_OUTPUT_PATH <- list(
   figures = here("results", "EDA", "figures"),
   tables = here("results", "EDA", "tables")
+)
+
+AIM1_OUTPUT_PATH <- list(
+  figures = here("results", "Aim1", "figures"),
+  tables = here("results", "Aim1", "tables")
 )
 
 DATA_INTERMEDIATE_PATH <- here("data", "intermediate")

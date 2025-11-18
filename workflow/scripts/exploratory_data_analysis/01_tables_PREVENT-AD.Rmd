@@ -17,6 +17,7 @@ clinical_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_clinical_ra
 lifestyle_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_lifestyle_raw.rds"))
 apoe <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_apoe.rds"))
 biomarkers <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_biomarkers.rds"))
+diagnosis <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_diagnosis.rds"))
 PREVENTAD_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_dat.rds"))
 ```
 
@@ -24,7 +25,9 @@ PREVENTAD_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_dat.rds"))
 ```{r}
 table1_gtsummary <- PREVENTAD_dat$demographics %>% #clinical_raw %>%
   select(CONP_ID, Sex, Education_years, Ethnicity) %>%
-  left_join((PREVENTAD_dat$diagnosis %>%
+  left_join((diagnosis %>%
+               group_by(CONP_ID) %>%
+               slice_tail() %>%
               select(CONP_ID, Clinical_diagnosis)), by="CONP_ID") %>%
   left_join((clinical_raw %>%
                select(CONP_ID, Candidate_Age)), by="CONP_ID") %>%
@@ -56,7 +59,7 @@ table1_gtsummary <- PREVENTAD_dat$demographics %>% #clinical_raw %>%
                  Education_level = "Education (level)",
                  apoe_category = "APOE category"),
     statistic = list(all_continuous() ~ "{mean} ({sd})",
-                     all_categorical() ~ "{n} ({p})")
+                     all_categorical() ~ "{n} ({p}%)")
   ) %>%
   modify_spanning_header(all_stat_cols() ~ "**Clinical diagnosis**") %>%
   modify_footnote(all_stat_cols() ~ "Mean (SD) for continuous; n (%) for categorical") %>%
@@ -72,11 +75,12 @@ table1_gtsummary <- PREVENTAD_dat$demographics %>% #clinical_raw %>%
   )
 table1_gtsummary
 
-gtsave(table1_gtsummary, filename = file.path(EDA_OUTPUT_PATH$tables, "PREVENT-AD_demographics.png"))
+# gtsave(table1_gtsummary, filename = file.path(EDA_OUTPUT_PATH$tables, "PREVENT-AD_demographics.png"))
 ```
 
 
-# Biomarker data availability table
+# Biomarkers
+## Data availability table
 ```{r}
 biomarker_cols <- names(biomarkers)[7:18]
 
@@ -123,5 +127,107 @@ table2_gtsummary
 gtsave(table2_gtsummary, filename = file.path(EDA_OUTPUT_PATH$tables, "PREVENT-AD_BBM_dataavail.png"))
 ```
 
+## Biomarker summary statistics
+```{r}
+# Summary statistics of biomarker data
+biomarker_cols <- c("AB_ratio_simoa_4plex", "GFAP_simoa_4plex", "NFL_simoa_4plex",
+                    "ptau181_simoa_UGOT", "ptau217_simoa_UGOT", "ptau231_simoa_UGOT")
 
+biomarker_table1 <- biomarkers %>%
+  select(CONP_ID, all_of(biomarker_cols)) %>%
+  group_by(CONP_ID) %>%
+  summarise_at(.vars = biomarker_cols, .funs=c(mean="mean"), na.rm=TRUE) %>%
+  left_join((diagnosis %>%
+               select(CONP_ID, Clinical_diagnosis) %>%
+               group_by(CONP_ID) %>%
+               slice_tail()), 
+            by="CONP_ID") %>%
+  select(-CONP_ID) %>%
+  tbl_summary(
+    by=Clinical_diagnosis,
+    missing="no",
+    statistic = list(all_continuous() ~ "{mean} ({sd}) [{min}-{max}]",
+                     all_categorical() ~ "{n} ({p})"),
+    label = list(AB_ratio_simoa_4plex_mean = "Aβ42/Aβ40",
+                 GFAP_simoa_4plex_mean = "GFAP (pg/mL)",
+                 NFL_simoa_4plex_mean = "NfL (pg/mL)",
+                 ptau181_simoa_UGOT_mean = "p-tau 181 (pg/mL)",
+                 ptau217_simoa_UGOT_mean = "p-tau 217 (pg/mL)",
+                 ptau231_simoa_UGOT_mean = "p-tau 231 (pg/mL)")
+  ) %>%
+  bold_labels() %>%
+  as_gt()
+biomarker_table1
+gtsave(biomarker_table1, filename = file.path(EDA_OUTPUT_PATH$tables, "PREVENT-AD_BBM_mean.png"))
+```
 
+# Family history table
+```{r}
+table3_gtsummary <- PREVENTAD_dat$family_history %>%
+  left_join((diagnosis %>%
+               group_by(CONP_ID) %>%
+               slice_tail() %>%
+              select(CONP_ID, Clinical_diagnosis)), by="CONP_ID") %>%
+  mutate(
+    father_dx_ad_dementia = as.factor(if_else(father_dx_ad_dementia == 0, "No", "Yes")),
+    mother_dx_ad_dementia = as.factor(if_else(mother_dx_ad_dementia == 0, "No", "Yes")),
+    sibling_dx_ad_dementia = as.factor(if_else(sibling_dx_ad_dementia == 0, "No", "Yes")),
+    Clinical_diagnosis = if_else(is.na(Clinical_diagnosis), "CN", Clinical_diagnosis)) %>%
+  select(-CONP_ID) %>%
+  tbl_summary(
+    by = Clinical_diagnosis,
+    type = list(all_dichotomous() ~ "categorical",
+                sibling_dx_ad_dementia_count ~ "continuous",
+                sibling_onset_age_1 ~ "continuous",
+                sibling_onset_age_2 ~ "continuous",
+                sibling_onset_age_3 ~ "continuous",
+                other_family_members_AD ~ "continuous",
+                other_maternal_family_members_AD ~ "continuous",
+                other_paternal_family_members_AD ~ "continuous"),
+    label = list(father_dx_ad_dementia = "Father affected with AD-like dementia",
+                 father_onset_age = "Age of father at AD-like dementia onset",
+                 mother_dx_ad_dementia = "Mother affected with AD-like dementia",
+                 mother_onset_age = "Age of mother at AD-like dementia onset",
+                 sibling_dx_ad_dementia = "Sibling(s) affected with AD-like dementia",
+                 sibling_dx_ad_dementia_count = "Number of siblings affected",
+                 sibling_onset_age_1 = "Age of sibling 1 at AD-like dementia onset",
+                 sibling_onset_age_2 = "Age of sibling 2 at AD-like dementia onset",
+                 sibling_onset_age_3 = "Age of sibling 3 at AD-like dementia onset",
+                 other_family_members_AD = "Total number of other family members affected with AD-like dementia",
+                 other_maternal_family_members_AD = "Maternal",
+                 other_paternal_family_members_AD = "Paternal"),
+    statistic = list(all_continuous() ~ "{mean} ({sd})",
+                     all_categorical() ~ "{n} ({p}%)")
+  ) %>%
+  add_n() %>%
+  remove_row_type(type = "missing") %>%
+  modify_spanning_header(all_stat_cols() ~ "**Clinical Diagnosis**") %>%
+  modify_column_indent(columns = label,
+                       rows = variable %in% c("father_onset_age", "mother_onset_age"),
+                       indent = 8) %>%
+  modify_column_indent(columns = label, 
+                       rows = variable %in% c("sibling_onset_age_1",
+                                              "sibling_onset_age_2",
+                                              "sibling_onset_age_3",
+                                              "other_maternal_family_members_AD",
+                                              "other_paternal_family_members_AD")) %>%
+  modify_footnote(all_stat_cols() ~ "Mean (SD) for continuous; n (%) for categorical") %>%
+  bold_labels() %>%
+  italicize_levels() %>%
+  remove_bold(columns = label, rows = variable %in% c("father_onset_age", 
+                                                      "mother_onset_age",
+                                                      "sibling_onset_age_1",
+                                                      "sibling_onset_age_2",
+                                                      "sibling_onset_age_3",
+                                                      "other_maternal_family_members_AD",
+                                                      "other_paternal_family_members_AD")) %>%
+  as_gt() %>%
+  tab_style(
+    style = list(cell_text(weight = "bold"), 
+                 cell_fill(color = "#f8f9fa")),
+    locations = cells_row_groups()
+  )
+table3_gtsummary
+
+# gtsave(table3_gtsummary, filename = file.path(EDA_OUTPUT_PATH$tables, "PREVENT-AD_fhx.png"))
+```

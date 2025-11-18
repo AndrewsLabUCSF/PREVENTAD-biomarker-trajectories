@@ -16,8 +16,10 @@ source('workflow/scripts/config.R')
 clinical_raw <- readRDS(file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_clinical_imp_raw.rds"))
 apoe <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_apoe.rds"))
 grs <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_GRS.rds"))
+grs_imp <- readRDS(file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_GRS_imp.rds"))
 biomarkers <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_biomarkers.rds"))
 cogd_dat <- readRDS(file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_cogd_scored_dat.rds"))
+diagnosis <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_diagnosis.rds"))
 libra_dat <- readRDS(file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_libra_scored_dat.rds"))
 fhx <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_fhx_dat.rds"))
 
@@ -33,21 +35,54 @@ baseline_dat <- fhx %>%
   left_join((grs %>%
                select(CONP_ID, GRS)),
             by="CONP_ID") %>%
+  left_join((grs_imp %>%
+               select(CONP_ID, GRS_imp)),
+            by="CONP_ID") %>%
   left_join((cogd_dat %>% 
                select(CONP_ID, score_cogd)),
             by="CONP_ID") %>%
   left_join((libra_dat %>% 
                select(CONP_ID, score_libra2)),
             by="CONP_ID") %>%
-  select(CONP_ID, score_cogd, score_libra2, GRS, Candidate_Age, Sex,
-         Education_years, ptau181_simoa_UGOT, ptau217_simoa_UGOT, AB_ratio_simoa_4plex, 
-         NFL_simoa_4plex, GFAP_simoa_4plex, apoe_category) %>%
+  select(CONP_ID, score_cogd, score_libra2, GRS, GRS_imp, Candidate_Age, Sex,
+         Education_years, ptau181_simoa_UGOT, ptau217_simoa_UGOT, 
+         ptau231_simoa_UGOT, AB_ratio_simoa_4plex, NFL_simoa_4plex, 
+         GFAP_simoa_4plex, apoe_category) %>%
   pivot_longer(
-    cols = c(ptau181_simoa_UGOT, ptau217_simoa_UGOT, AB_ratio_simoa_4plex,
-             NFL_simoa_4plex, GFAP_simoa_4plex),
+    cols = biomarker_cols,
+    names_to = "biomarker",
+    values_to = "measure"
+  ) %>%
+  filter(CONP_ID %in% baseline_biomarkers$CONP_ID)
+
+baseline_biomarkers_longer <- baseline_biomarkers %>%
+  pivot_longer(
+    cols = biomarker_cols,
     names_to = "biomarker",
     values_to = "measure"
   )
+```
+
+# GRS original vs imputed
+```{r}
+grs_plot <- grs_imp %>%
+  select(CONP_ID, GRS_imp) %>%
+  left_join((grs %>%
+               select(CONP_ID, GRS)),
+            by="CONP_ID") 
+
+grs_plot_longer <- grs_plot %>%
+  pivot_longer(
+    cols = c(GRS_imp, GRS),
+    names_to = "grs",
+    values_to = "score"
+  ) %>%
+  ggplot(aes(x=grs, y=score)) +
+  geom_boxplot() +
+  stat_compare_means(paired=TRUE)
+grs_plot_longer
+
+t.test(grs_plot$GRS_imp, grs_plot$GRS, var.equal = TRUE)
 ```
 
 # Biomarker data availability table
@@ -128,21 +163,33 @@ plot1 <- baseline_dat %>%
   theme(legend.position="none")
 
 plot1
-# ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_APOE_vs_BBM.png"), plot1)
+ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_APOE_vs_BBM_filtered.png"), plot1)
 ```
 
 # Biomarker trajectories
 ```{r}
 biomarkers_longer <- biomarkers %>%
+  left_join((diagnosis %>%
+               select(CONP_ID, Clinical_diagnosis) %>%
+               group_by(CONP_ID) %>%
+               slice_tail()),
+            by="CONP_ID") %>%
+  mutate(Date_taken = ym(Date_taken)) %>%
+  group_by(CONP_ID) %>%
+  mutate(
+    baseline_date = first(Date_taken),
+    months_since_baseline = interval(baseline_date, Date_taken) / months(1)
+  ) %>%
+  relocate(months_since_baseline, .after=Date_taken) %>%
   pivot_longer(
-    cols = c(ptau181_simoa_UGOT, ptau217_simoa_UGOT, AB_ratio_simoa_4plex,
-             NFL_simoa_4plex, GFAP_simoa_4plex),
+    cols = c(ptau181_simoa_UGOT, ptau217_simoa_UGOT, ptau231_simoa_UGOT,
+             AB_ratio_simoa_4plex, NFL_simoa_4plex, GFAP_simoa_4plex),
     names_to = "biomarker",
     values_to = "measure"
   ) %>%
-  mutate(age_centered = Candidate_Age - 65)
+  filter(!is.na(measure))
 
-plot2 <- ggplot(biomarkers_longer, aes(x=Candidate_Age, y=measure)) +
+plot2 <- ggplot(biomarkers_longer, aes(x=months_since_baseline, y=measure)) +
   geom_line(aes(group=CONP_ID), linewidth=0.3) +
   facet_wrap(~ biomarker, scales="free") +
   labs(x = "Age (years)",
@@ -150,25 +197,78 @@ plot2 <- ggplot(biomarkers_longer, aes(x=Candidate_Age, y=measure)) +
        title = "PREVENT-AD Individual Biomarker Trajectories")
 plot2
 
-plot3 <- ggplot(biomarkers_longer, aes(x=Candidate_Age, y=measure)) +
+plot3 <- ggplot(biomarkers_longer, aes(x=months_since_baseline, y=measure)) +
   # indiv trajectories
   geom_line(aes(group=CONP_ID), alpha=0.1, linewidth=0.3) +
   # mean trajectories
   geom_smooth(method = "loess", se = TRUE, linewidth = 1, alpha = 0.5) +
-  facet_wrap(~ biomarker, scales="free") +
-  labs(x = "Age (years)",
+  facet_wrap(~ biomarker, scales="free", ncol=3) +
+  labs(x = "Months Since Baseline",
        y = "Biomarker Level (pg/mL or AB ratio)",
-       title = "PREVENT-AD Mean Biomarker Trajectories")
+       title = "PREVENT-AD Mean Biomarker Trajectories by Months Since Baseline") 
 plot3
+
+# By clinical diagnosis
+plot4 <- ggplot(biomarkers_longer, aes(x=Candidate_Age, y=measure, color=Clinical_diagnosis)) +
+  # indiv trajectories
+  geom_line(aes(group=CONP_ID), alpha=0.1, linewidth=0.3) +
+  # mean trajectories
+  geom_smooth(method = "loess", se = TRUE, linewidth = 0.75, alpha = 0.4) +
+  facet_wrap(~ biomarker, scales="free", ncol=3) +
+  labs(x = "Age (Years)",
+       y = "Biomarker Level (pg/mL or AB ratio)",
+       title = "PREVENT-AD Mean Biomarker Trajectories by Age",
+       color = "Clinical Diagnosis") 
+plot4
+
+# Violin plot
+p_values_with_pos <- biomarkers_longer %>%
+  group_by(biomarker) %>%
+  summarise(
+    p_value = kruskal.test(measure ~ Clinical_diagnosis)$p.value,
+    p_label = paste0("p = ", format.pval(p_value, digits = 2)),
+    max_y = max(measure, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    # Default: 10% above max
+    label_y = max_y * 1.1,
+    # Override for specific biomarker
+    label_y = if_else(biomarker == "AB_ratio_simoa_4plex", 
+                      max_y * 1.05,  # Only 5% above for this one
+                      label_y)
+  )
+
+plot5 <- ggplot(biomarkers_longer, 
+       aes(x = Clinical_diagnosis, 
+           y = measure, 
+           fill = Clinical_diagnosis)) +
+  geom_violin(alpha=0.7) +
+  geom_boxplot(width=0.1, fill="white") +
+  facet_wrap(~ biomarker, scales="free") +
+  geom_text(
+    data = p_values_with_pos,
+    aes(x = 2.5, y = label_y, label = p_label),
+    inherit.aes = FALSE,
+    size = 2,
+    fontface = "italic"
+  ) +
+  facet_wrap(~biomarker, scales = "free_y", ncol = 3) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  labs(x = "Clinical Diagnosis",
+       y = "Biomarker Level (pg/mL or AB ratio)",
+       title = "PREVENT-AD Biomarker Levels by Clinical Diagnosis",
+       fill = "Clinical Diagnosis") 
+plot5
   
 # Saving plots
 #ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_BBM_traj_indiv.png"), plot2)
-ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_BBM_traj_mean.png"), plot3)
+# ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_BBM_vs_CD.png"), plot5)
 ```
 
 
 # Biomarker associations (baseline)
-## GRS:biomarkers
+## GRS (original):biomarkers
 ```{r}
 pval_df1 <- baseline_dat %>%
   group_by(biomarker) %>%
@@ -202,9 +302,45 @@ plot4 <- baseline_dat %>%
   theme(legend.position = "bottom") 
 plot4
 
-ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_GRS_vs_BBM.png"), plot4)
+ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_GRS_vs_BBM_filtered.png"), plot4)
 ```
 
+## GRS (imputed):biomarkers
+```{r}
+pval_df1.1 <- baseline_dat %>%
+  group_by(biomarker) %>%
+  summarise(
+    p_value = tryCatch({
+      anova(lm(measure ~ GRS_imp))$`Pr(>F)`[1]
+    }, error = function(e) NA_real_),
+    .groups = "drop"
+  ) %>%
+  filter(!is.na(p_value)) %>%
+  mutate(p_label = case_when(
+    p_value < 0.001 ~ "p < 0.001",
+    p_value < 0.01 ~ paste0("p = ", round(p_value, 3)),
+    TRUE ~ paste0("p = ", round(p_value, 2))
+  ))
+
+plot4.1 <- baseline_dat %>%
+  ggplot(aes(x = GRS_imp, y = measure)) +
+  geom_point(alpha = 0.5, size = 1) +
+  geom_smooth(method = "lm", se = TRUE, linewidth = 0.5) +
+  geom_text(data = pval_df1.1,
+            aes(Inf, Inf, label = p_label), 
+            hjust = 1,
+            vjust = 2,
+            size = 3) +
+  facet_wrap(~biomarker, scales="free") + 
+  labs(x = "GRS (imputed)",
+       y = "Biomarker Level (pg/mL or AB ratio)",
+       title = "GRS (imputed) and AD Blood-based Biomarker Levels in PREVENT-AD") +
+  theme_minimal() +
+  theme(legend.position = "bottom") 
+plot4.1
+
+ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_GRS_vs_BBM.png"), plot4)
+```
 
 ## CogDrisk:biomarkers
 ```{r}
@@ -243,7 +379,7 @@ plot5 <- baseline_dat %>%
   theme(legend.position = "bottom") 
 plot5
 
-# ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_CogD_vs_BBM.png"), plot5)
+ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_CogD_vs_BBM_filtered.png"), plot5)
 ```
 
 
@@ -282,6 +418,6 @@ plot6 <- baseline_dat %>%
   theme(legend.position = "bottom") 
 plot6
 
-# ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_LIBRA2_vs_BBM.png"), plot6)
+ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_LIBRA2_vs_BBM_filtered.png"), plot6)
 ```
 

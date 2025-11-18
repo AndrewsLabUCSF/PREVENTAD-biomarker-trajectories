@@ -11,6 +11,24 @@ library(pharm)
 clinical_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_clinical_raw.rds"))
 lifestyle_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_lifestyle_raw.rds"))
 fhx_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_fhx_raw.rds"))
+gwas_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_GWAS.rds"))
+
+
+
+# GWAS --------------------------------------------------------------------
+gwas_imp <- clinical_raw %>%
+  select(CONP_ID) %>%
+  left_join((gwas_raw %>% select(-CONP_CandID)), by="CONP_ID") %>%
+  mutate(across(starts_with("rs"), as.factor)) %>%
+  select(-CONP_ID)
+
+gwas_imp_mf <- missForest(gwas_imp, verbose=TRUE, maxiter=10, ntree=100)
+gwas_imp_mf_dat <- cbind(gwas_imp_mf$ximp, CONP_ID=clinical_raw$CONP_ID) %>%
+  relocate(CONP_ID) %>%
+  mutate(across(starts_with("rs"), as.numeric))
+         
+# Save dataset
+saveRDS(gwas_imp_mf_dat, file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_GWAS_imp.rds"))
 
 
 # MEDICATION --------------------------------------------------------------
@@ -92,10 +110,10 @@ dat_fhx <- fhx_raw %>%
          
          FDRAD_1ormore = if_else(FDR_AD == 1, 1, 2),
          FDR_ext_AD = case_when(
-           var1 == 1 & ext_relatives_AD == 0 ~ 1,
-           var1 == 1 & ext_relatives_AD == 1 ~ 2,
-           var1 == 2 & ext_relatives_AD == 0 ~ 3,
-           var1 == 2 & ext_relatives_AD == 1 ~ 4,
+           FDRAD_1ormore == 1 & ext_relatives_AD == 0 ~ 1,
+           FDRAD_1ormore == 1 & ext_relatives_AD == 1 ~ 2,
+           FDRAD_1ormore == 2 & ext_relatives_AD == 0 ~ 3,
+           FDRAD_1ormore == 2 & ext_relatives_AD == 1 ~ 4,
            TRUE ~ NA
          ) %>% as.factor()
   ) %>%

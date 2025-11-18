@@ -14,7 +14,7 @@ library(ggpubr)
 source('workflow/scripts/config.R')
 source(CRS_FN)
 
-dat_fhx <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_fhx_raw.rds"))
+dat_fhx <- readRDS(file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_fhx_dat.rds"))
 biomarkers <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_biomarkers.rds"))
 PREVENTAD_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_dat.rds"))
 ```
@@ -34,6 +34,7 @@ hist2
 ## Recoded family history variable vs biomarker levels
 ```{r}
 df1 <- dat_fhx %>%
+  filter(CONP_ID %in% baseline_biomarkers$CONP_ID) %>%
   left_join((biomarkers %>%
                group_by(CONP_ID) %>%
                slice(1)),
@@ -41,8 +42,7 @@ df1 <- dat_fhx %>%
   
 df1_longer <- df1 %>%
   pivot_longer(
-    cols = c(ptau181_simoa_UGOT, ptau217_simoa_UGOT, AB_ratio_simoa_4plex,
-             NFL_simoa_4plex, GFAP_simoa_4plex),
+    cols = biomarker_cols,
     names_to = "biomarker",
     values_to = "measure"
   ) %>%
@@ -150,7 +150,7 @@ plot2 <- ggplot(df1_longer, aes(x=ext_relatives_AD,
   theme(legend.position="none")
 plot2
 
-# ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_fhx_vs_BBM_var2.png"), plot2)
+ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_fhx_vs_BBM_var2_filtered.png"), plot2)
 ```
 
 ## Number of extended family members with AD vs biomarker levels
@@ -232,7 +232,7 @@ plot4 <- ggplot(df1_longer, aes(x=as.factor(FDRAD_1ormore),
   geom_text(data = pval_df4,
             aes(Inf, Inf, label = p_label),
             vjust = 2,
-            hjust = 1,
+            hjust = 3,
             size = 3,
             inherit.aes = FALSE) +
   labs(x = "FDR AD",
@@ -241,7 +241,7 @@ plot4 <- ggplot(df1_longer, aes(x=as.factor(FDRAD_1ormore),
   theme(legend.position="none")
 plot4
 
-# ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_fhx_vs_BBM_var4.png"), plot4)
+ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_fhx_vs_BBM_var4_filtered.png"), plot4)
 ```
 
 
@@ -289,5 +289,5 @@ plot5 <- ggplot(df1_longer, aes(x=as.factor(FDR_ext_AD),
         axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
 plot5
 
-ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_fhx_vs_BBM_var5.png"), plot5)
+ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_fhx_vs_BBM_var5_filtered.png"), plot5)
 ```

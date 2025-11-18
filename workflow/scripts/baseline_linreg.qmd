@@ -8,8 +8,12 @@ knitr::opts_chunk$set(echo = FALSE, message = FALSE, warnings = FALSE)
 knitr::opts_knit$set(root.dir = here::here())
 ```
 
+# Load data
 ```{r setting}
 library(ggpubr)
+library(broom)
+library(car)
+library(jtools)
 
 source('workflow/scripts/config.R')
 
@@ -17,33 +21,582 @@ clinical_raw <- readRDS(file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_cli
 lifestyle_raw <- readRDS(file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_lifestyle_imp_raw.rds"))
 apoe <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_apoe.rds"))
 biomarkers <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_biomarkers.rds"))
-PREVENTAD_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_dat.rds"))
+diagnosis <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_diagnosis.rds"))
 cogd_dat <- readRDS(file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_cogd_scored_dat.rds"))
+fhx <- readRDS(file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_fhx_dat.rds"))
+grs <- readRDS(file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_GRS.rds"))
 libra_dat <- readRDS(file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_libra_scored_dat.rds"))
-fhx <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_fhx_dat.rds"))
+PREVENTAD_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_dat.rds"))
 
-baseline_dat <- fhx %>%
+
+predictors_dat <- grs %>%
   left_join((clinical_raw %>%
-               select(CONP_ID, Sex, Education_years)),
-            by="CONP_ID") %>%
-  left_join((biomarkers %>%
-               group_by(CONP_ID) %>%
-               slice(1)),
+               select(CONP_ID, Candidate_Age, Sex, Education_years) %>%
+               mutate(Candidate_Age = Candidate_Age/12)),
             by="CONP_ID") %>%
   left_join(apoe, by="CONP_ID") %>%
   left_join((cogd_dat %>% 
-               select(CONP_ID, score_cogd=score)),
+               select(CONP_ID, score_cogd)),
             by="CONP_ID") %>%
+  left_join(fhx, by="CONP_ID") %>%
   left_join((libra_dat %>% 
-               select(CONP_ID, score_libra2=score)),
+               select(CONP_ID, score_libra2)),
             by="CONP_ID") %>%
-  select(CONP_ID, score_cogd, score_libra2, Candidate_Age, Sex,
-         Education_years, ptau181_simoa_UGOT, ptau217_simoa_UGOT, AB_ratio_simoa_4plex, 
-         NFL_simoa_4plex, GFAP_simoa_4plex, apoe_category) %>%
+  select(CONP_ID, Candidate_Age, Sex, Education_years, apoe_category, 
+         score_cogd, GRS, score_libra2, FDR_ext_AD)
+```
+
+# Create filtered datasets
+```{r}
+biomarker_cols <- c("AB_ratio_simoa_4plex", "GFAP_simoa_4plex", "NFL_simoa_4plex",
+                    "ptau181_simoa_UGOT", "ptau217_simoa_UGOT", "ptau231_simoa_UGOT")
+
+biomarkers_filtered <- biomarkers %>%
+  filter(CONP_ID %in% predictors_dat$CONP_ID) %>%
+  select(CONP_ID, Visit_label, biomarker_cols)
+
+baseline_biomarkers <- biomarkers_filtered %>% 
+  filter(grepl("00", Visit_label)) 
+
+predictors_filtered_dat <- predictors_dat %>%
+  filter(CONP_ID %in% baseline_biomarkers$CONP_ID)
+
+all_dat <- predictors_filtered_dat %>%
+  left_join(baseline_biomarkers, by="CONP_ID")
+
+saveRDS(biomarkers_filtered, file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_biomarkers_filtered.rds"))
+```
+
+# Summary tables
+## Biomarker summary statistics
+```{r}
+# Summary statistics of biomarker data
+biomarker_table1 <- biomarkers_filtered %>%
+  select(CONP_ID, all_of(biomarker_cols)) %>%
+  left_join((diagnosis %>%
+               group_by(CONP_ID) %>%
+               slice_tail()), 
+            by="CONP_ID") %>%
+  select(-CONP_ID, -Date, -Source_clinical_diagnosis) %>%
+  tbl_summary(
+    by=Clinical_diagnosis,
+    missing="no",
+    statistic = list(all_continuous() ~ "{mean} ({sd}) [{min}-{max}]",
+                     all_categorical() ~ "{n} ({p})"),
+    label = list(AB_ratio_simoa_4plex = "Aβ42/Aβ40",
+                   GFAP_simoa_4plex = "GFAP (pg/mL)",
+                   NFL_simoa_4plex = "NfL (pg/mL)",
+                   ptau181_simoa_UGOT = "p-tau 181 (pg/mL)",
+                   ptau217_simoa_UGOT = "p-tau 217 (pg/mL)")
+  ) %>%
+  bold_labels() %>%
+  as_gt()
+biomarker_table1
+# gtsave(biomarker_table1, filename = file.path(EDA_OUTPUT_PATH$tables, "PREVENT-AD_biomarker_levels.png"))
+```
+
+```{r}
+obs_per_patient_with_dx <- biomarkers_filtered %>%
+  left_join((diagnosis %>%
+               group_by(CONP_ID) %>%
+               slice_tail()), 
+            by="CONP_ID") %>%
+  select(CONP_ID, biomarker_cols, Clinical_diagnosis) %>%
+  group_by(CONP_ID) %>%
+  summarise(
+    across(
+      all_of(biomarker_cols),
+      ~sum(!is.na(.)),
+      .names = "{.col}"
+    ),
+    diagnosis = last(Clinical_diagnosis),  
+    .groups = "drop"
+  )
+
+table1 <- obs_per_patient_with_dx %>%
+  select(diagnosis, all_of(biomarker_cols)) %>%
+  tbl_summary(
+    by = diagnosis,
+    type = everything() ~ "continuous",
+    statistic = list(everything() ~ "{mean} ({sd})"),
+    digits = list(everything() ~ 2),
+    missing = "no"
+  )
+
+# Create table by diagnosis with both stats
+table2 <- obs_per_patient_with_dx %>%
+  select(diagnosis, all_of(biomarker_cols)) %>%
+  mutate(across(all_of(biomarker_cols), ~.x >= 2)) %>%
+  tbl_summary(
+    by = diagnosis,
+    type = everything() ~ "dichotomous",
+    statistic = list(everything() ~ "{n}"),
+    value = lapply(biomarker_cols, function(x) TRUE) %>% setNames(biomarker_cols),
+    missing = "no",
+    label = lapply(biomarker_cols, function(x) "    N with ≥2 observations") %>%
+      setNames(biomarker_cols)
+  ) 
+
+table_list <- list()
+for (i in seq_along(biomarker_cols)) {
+  biomarker <- biomarker_cols[i]
+  
+  # Table for mean (SD)
+  t1 <- obs_per_patient_with_dx %>%
+    select(diagnosis, all_of(biomarker)) %>%
+    tbl_summary(
+      by = diagnosis,
+      type = everything() ~ "continuous",
+      statistic = list(everything() ~ "{mean} ({sd})"),
+      digits = list(everything() ~ 2),
+      label = list(AB_ratio_simoa_4plex = "N of Aβ42/Aβ40 measures per participant",
+                   GFAP_simoa_4plex = "N of GFAP measures per participant",
+                   NFL_simoa_4plex = "N of NfL measures per participant",
+                   ptau181_simoa_UGOT = "N of p-tau 181 measures per participant",
+                   ptau217_simoa_UGOT = "N of p-tau 217 measures per participant"),
+      missing = "no"
+    )
+  
+  # Table for N with ≥2
+  t2 <- obs_per_patient_with_dx %>%
+    select(diagnosis, all_of(biomarker)) %>%
+    mutate(across(all_of(biomarker), ~.x >= 2)) %>%
+    tbl_summary(
+      by = diagnosis,
+      type = everything() ~ "dichotomous",
+      statistic = list(everything() ~ "{n}"),
+      value = setNames(list(TRUE), biomarker),
+      missing = "no",
+      label = setNames(list("N with ≥2 measures"), biomarker)
+    )
+  
+  # Add both to list
+  table_list[[2*i - 1]] <- t1
+  table_list[[2*i]] <- t2
+}
+
+# Stack all tables
+biomarker_table2 <- tbl_stack(table_list) %>%
+  modify_column_indent(
+    columns = label,
+    rows = var_label %in% c("N with ≥2 measures")
+  ) %>%
+  modify_table_styling(
+      columns = "label",
+      rows = !var_label %in% c("N with ≥2 measures"),
+      text_format = "bold"
+      )
+```
+
+## Baseline participant characteristics
+```{r}
+# Patient charateristics
+patient_table1 <- predictors_filtered_dat %>%
+  left_join((diagnosis %>%
+               select(CONP_ID, Clinical_diagnosis) %>%
+               group_by(CONP_ID) %>%
+               slice_tail()), 
+            by="CONP_ID") %>%
+  mutate(Clinical_diagnosis = if_else(is.na(Clinical_diagnosis), "CN", Clinical_diagnosis)) %>%
+  select(-CONP_ID) %>%
+  mutate(FDR_ext_AD = factor(FDR_ext_AD,
+                             levels=c(1, 2, 3, 4),
+                             labels=c("1 FDR", "1 FDR + ext", "2+ FDR", "2+ FDR + ext"))) %>%
+  tbl_summary(
+    by = Clinical_diagnosis,
+    label = list(Candidate_Age = "Age",
+                 Education_years = "Education (years)",
+                 apoe_category = "APOE category",
+                 score_cogd = "CogDrisk score",
+                 score_libra2 = "LIRBA2 score",
+                 FDR_ext_AD = "Family history"),
+    statistic = list(all_continuous() ~ "{mean} ({sd}) [{min}-{max}]",
+                     all_categorical() ~ "{n} ({p}%)")
+  ) %>%
+  modify_footnote(all_stat_cols() ~ "Mean (SD) for continuous; n (%) for categorical") %>%
+  bold_labels() %>%
+  italicize_levels() %>%
+  as_gt()
+
+#table1_gtsummary <- tbl_stack(list(patient_table1, biomarker_table2)) %>% as_gt()
+patient_table1
+gtsave(patient_table1, filename = file.path(EDA_OUTPUT_PATH$tables, "PREVENT-AD_baseline.png"))
+```
+
+
+
+# Checking for multicollinearity
+```{r}
+# Check for multicollinearity among predictors
+predictors_only <- all_filtered_dat %>%
+  select(score_cogd, score_libra2, GRS, FDR_ext_AD) %>%
+  mutate(FDR_ext_AD = as.numeric(FDR_ext_AD))
+
+cor_df <- cor(predictors_only)  
+melted_cor <- reshape2::melt(cor_df)
+
+plot1 <- ggplot(data = melted_cor, aes(x=Var1, y=Var2, fill=value)) +
+  geom_tile() +
+  geom_text(aes(label = round(value, 2)), color="white") +
+  labs(title = "Correlation Heatmap of Predictors")
+plot1
+# ggsave(file.path(AIM1_OUTPUT_PATH$figures, "PREVENTAD_predictor_corr.png"), plot1)
+```
+# Checking Normality of baseline biomarker data
+```{r}
+plot2 <- biomarkers_longer %>%
+  #select(CONP_ID, biomarker_cols) %>%
+  # pivot_longer(
+  #   cols = biomarker_cols,
+  #   names_to = "biomarker",
+  #   values_to = "measure"
+  # ) %>%
+  ggplot(aes(x = measure)) +
+  geom_density() +
+  facet_wrap(~ biomarker, scales="free")
+plot2
+# ggsave(file.path(AIM1_OUTPUT_PATH$figures, "PREVENTAD_biomarker_dist.png"), plot2)
+
+plot3 <- baseline_biomarkers %>%
+  select(CONP_ID, GFAP_simoa_4plex, NFL_simoa_4plex, ptau181_simoa_UGOT, ptau217_simoa_UGOT) %>%
   pivot_longer(
-    cols = c(ptau181_simoa_UGOT, ptau217_simoa_UGOT, AB_ratio_simoa_4plex,
-             NFL_simoa_4plex, GFAP_simoa_4plex),
+    cols = c(GFAP_simoa_4plex, NFL_simoa_4plex, ptau181_simoa_UGOT, ptau217_simoa_UGOT),
     names_to = "biomarker",
     values_to = "measure"
-  )
+  ) %>%
+  mutate(measure_log = log(measure)) %>%
+  ggplot(aes(x = measure_log)) +
+  geom_density() +
+  facet_wrap(~ biomarker, scales="free")
+plot3
+
+# log transform
+baseline_biomarkers <- baseline_biomarkers %>%
+  mutate(GFAP_log = log(GFAP_simoa_4plex),
+         NFL_log = log(NFL_simoa_4plex),
+         ptau181_log = log(ptau181_simoa_UGOT),
+         ptau217_log = log(ptau217_simoa_UGOT))
 ```
+
+# Baseline models
+```{r}
+model1 <- lm(ptau217_log ~ Candidate_Age + Sex + apoe_category, data=all_dat)
+model2 <- lm(ptau217_log ~ score_cogd, data=all_dat)
+model2.1 <- lm(ptau217_log ~ score_cogd + apoe_category, data=all_dat)
+model3 <- lm(ptau217_log ~ score_libra2, data=all_dat)
+model3.1 <- lm(ptau217_log ~ score_libra2 + Candidate_Age + Sex + apoe_category, data=all_dat)
+model4 <- lm(ptau217_log ~ score_libra2 + score_cogd + apoe_category, data=all_dat)
+model4.1 <- lm(ptau217_log ~ score_libra2 + score_cogd + Candidate_Age + Sex + apoe_category, data=all_dat)
+model5 <- lm(ptau217_log ~ score_libra2 + score_cogd + GRS + Candidate_Age + Sex + apoe_category, data=all_dat)
+model6 <- lm(ptau217_log ~ score_libra2 + score_cogd + GRS + FDR_ext_AD + Candidate_Age + Sex + apoe_category, data=all_dat)
+
+
+jtools::summ(model1)
+jtools::summ(model2)
+jtools::summ(model2.1) 
+jtools::summ(model3)
+jtools::summ(model3.1)
+jtools::summ(model4)
+summ(model4.1)
+summ(model5)
+summ(model6)
+
+
+# run_sequential_models <- function(biomarker_name, data) {
+#   models <- list(
+#     baseline = lm(as.formula(paste0(biomarker_name, " ~ Candidate_Age + Sex + apoe_category")), data = data),
+#     model2 = lm(as.formula(paste0(biomarker_name, " ~ score_cogd + score_libra2")), data = data),
+#     model3 = lm(as.formula(paste0(biomarker_name, " ~ score_cogd + score_libra2 + GRS")), data = data),
+#     model4 = lm(as.formula(paste0(biomarker_name, " ~ score_cogd + score_libra2 + GRS + FDR_ext_AD")), data = data),
+#     model5 = lm(as.formula(paste0(biomarker_name, " ~ score_cogd + score_libra2 + GRS + FDR_ext_AD + apoe_category")), data = data)
+#   )
+#   return(models)
+# }
+```
+
+```{r}
+# ============================================================================
+# UNADJUSTED MODELS (Simple associations)
+# ============================================================================
+run_unadjusted_models <- function(biomarker_name, data) {
+  predictors <- c("score_cogd", "score_libra2", "GRS", "FDR_ext_AD", "apoe_category")
+  models <- list()
+  
+  for (pred in predictors) {
+    formula <- as.formula(paste0(biomarker_name, " ~ ", pred))
+    models[[pred]] <- lm(formula, data = data)
+  }
+  return(models)
+}
+
+# Run for all biomarkers
+unadjusted_results <- lapply(biomarker_cols, run_unadjusted_models, data = all_dat)
+names(unadjusted_results) <- biomarker_cols
+
+unadjusted_tables <- lapply(names(unadjusted_results), function(biomarker) {
+  tbl_merge(
+    tbls = lapply(unadjusted_results[[biomarker]], tbl_regression),
+    tab_spanner = c("**CogDrisk**", "**LIBRA-2**", "**GRS**", 
+                    "**Family History**", "**APOE**")
+  ) %>%
+    modify_caption(paste0("**Unadjusted Models: ", biomarker, "**"))
+})
+
+# View individual biomarker results
+unadjusted_tables[[1]]  # ptau217
+unadjusted_tables[[2]]  # abeta4240
+# etc.
+
+# ============================================
+# EQUENTIAL MODELS (adding predictors incrementally)
+# ============================================
+
+run_sequential_models <- function(biomarker_name, data) {
+  models <- list(
+    model1 = lm(as.formula(paste0(biomarker_name, " ~ score_cogd")), data = data),
+    model2 = lm(as.formula(paste0(biomarker_name, " ~ score_cogd + score_libra2")), data = data),
+    model3 = lm(as.formula(paste0(biomarker_name, " ~ score_cogd + score_libra2 + GRS")), data = data),
+    model4 = lm(as.formula(paste0(biomarker_name, " ~ score_cogd + score_libra2 + GRS + FDR_ext_AD")), data = data),
+    model5 = lm(as.formula(paste0(biomarker_name, " ~ score_cogd + score_libra2 + GRS + FDR_ext_AD + apoe_category")), data = data)
+  )
+  return(models)
+}
+
+# Run for all biomarkers
+sequential_results <- lapply(biomarker_cols, run_sequential_models, data = all_dat)
+names(sequential_results) <- biomarker_cols
+
+# Create tables for each biomarker
+sequential_tables <- lapply(names(sequential_results), function(biomarker) {
+  tbl_merge(
+    tbls = lapply(sequential_results[[biomarker]], tbl_regression),
+    tab_spanner = c("**Model 1**", "**Model 2**", "**Model 3**", "**Model 4**", "**Model 5**")
+  ) %>%
+    modify_caption(paste0("**Sequential Models: ", biomarker, "**"))
+})
+
+# View individual biomarker results
+sequential_tables[[1]]  # ptau217
+sequential_tables[[2]]  # abeta4240
+# etc.
+
+# ============================================
+# 3. MODEL FIT COMPARISON
+# ============================================
+
+compare_model_fit <- function(models, biomarker_name) {
+  data.frame(
+    Biomarker = biomarker_name,
+    Model = paste("Model", 1:5),
+    R_squared = sapply(models, function(m) summary(m)$r.squared),
+    Adj_R_squared = sapply(models, function(m) summary(m)$adj.r.squared),
+    AIC = sapply(models, AIC),
+    N = sapply(models, function(m) length(m$residuals))
+  )
+}
+
+# Create comparison table for all biomarkers
+fit_comparison <- do.call(rbind, lapply(names(sequential_results), function(biomarker) {
+  compare_model_fit(sequential_results[[biomarker]], biomarker)
+}))
+
+print(fit_comparison)
+```
+
+```{r}
+# ============================================================================
+# 5. FULLY ADJUSTED MODELS (All predictors together)
+# ============================================================================
+
+# Model 1: Main predictors only
+model1_ptau217 <- lm(
+  log_ptau217_simoa_UGOT ~ cogdrisk_score + libra2_score + grs + 
+    family_history + apoe_e4_carrier,
+  data = baseline_data
+)
+
+summary(model1_ptau217)
+
+# Model 2: Add demographic covariates
+model2_ptau217 <- lm(
+  log_ptau217_simoa_UGOT ~ cogdrisk_score + libra2_score + grs + 
+    family_history + apoe_e4_carrier + age + sex + education,
+  data = baseline_data
+)
+
+summary(model2_ptau217)
+
+# Check multicollinearity (VIF should be < 5-10)
+vif(model2_ptau217)
+
+# ============================================================================
+# 6. RUN MODELS FOR ALL BIOMARKERS (Loop approach)
+# ============================================================================
+
+# Create list to store all models
+all_models <- list()
+
+for (biomarker in paste0("log_", biomarker_cols)) {
+  
+  # Skip if biomarker doesn't exist
+  if (!biomarker %in% names(baseline_data)) next
+  
+  # Model formula
+  formula <- as.formula(paste0(
+    biomarker, " ~ cogdrisk_score + libra2_score + grs + ",
+    "family_history + apoe_e4_carrier + age + sex + education"
+  ))
+  
+  # Fit model
+  all_models[[biomarker]] <- lm(formula, data = baseline_data)
+}
+
+# ============================================================================
+# 7. CREATE REGRESSION TABLES WITH GTSUMMARY
+# ============================================================================
+
+# Single biomarker table
+table_ptau217 <- tbl_regression(
+  model2_ptau217,
+  exponentiate = FALSE,  # Set TRUE if you want exp(β) 
+  label = list(
+    cogdrisk_score ~ "COGDRISK Score",
+    libra2_score ~ "LIBRA2 Score",
+    grs ~ "Genetic Risk Score",
+    family_history ~ "Family History",
+    apoe_e4_carrier ~ "APOE ε4 Status",
+    age ~ "Age (years)",
+    sex ~ "Sex",
+    education ~ "Education (years)"
+  )
+) %>%
+  add_glance_table(
+    include = c(r.squared, adj.r.squared, nobs)
+  ) %>%
+  bold_p(t = 0.05) %>%
+  modify_caption("**Table: Predictors of log(pTau217) at Baseline**")
+
+table_ptau217
+
+# ============================================================================
+# 8. COMPARE MULTIPLE MODELS (side by side)
+# ============================================================================
+
+# Compare unadjusted vs adjusted
+tbl_merge_ptau217 <- tbl_merge(
+  tbls = list(
+    tbl_regression(model1_ptau217, label = list(
+      cogdrisk_score ~ "COGDRISK Score",
+      libra2_score ~ "LIBRA2 Score",
+      grs ~ "Genetic Risk Score"
+    )),
+    tbl_regression(model2_ptau217, label = list(
+      cogdrisk_score ~ "COGDRISK Score",
+      libra2_score ~ "LIBRA2 Score",
+      grs ~ "Genetic Risk Score"
+    ))
+  ),
+  tab_spanner = c("**Unadjusted**", "**Adjusted for demographics**")
+) %>%
+  modify_caption("**Table: Models for log(pTau217)**")
+
+tbl_merge_ptau217
+
+# ============================================================================
+# 9. STACK ALL BIOMARKERS IN ONE TABLE
+# ============================================================================
+
+# Create table for each biomarker and stack them
+biomarker_tables <- list()
+
+for (biomarker in names(all_models)) {
+  biomarker_tables[[biomarker]] <- tbl_regression(
+    all_models[[biomarker]],
+    include = c(cogdrisk_score, libra2_score, grs, family_history, apoe_e4_carrier)
+  )
+}
+
+# Stack all tables
+stacked_table <- tbl_stack(
+  biomarker_tables,
+  group_header = gsub("log_", "", names(biomarker_tables))
+) %>%
+  modify_caption("**Table: Predictors of Baseline Biomarker Levels**")
+
+stacked_table
+
+# ============================================================================
+# 10. MODEL DIAGNOSTICS
+# ============================================================================
+
+# Check assumptions for one model
+par(mfrow = c(2, 2))
+plot(model2_ptau217)
+
+# Normality of residuals
+shapiro.test(residuals(model2_ptau217))
+
+# Outliers and influential points
+outlierTest(model2_ptau217)
+influencePlot(model2_ptau217)
+
+# ============================================================================
+# 11. EXPORT RESULTS
+# ============================================================================
+
+# Export single table to Word
+table_ptau217 %>%
+  as_flex_table() %>%
+  flextable::save_as_docx(path = "ptau217_regression.docx")
+
+# Export all models to Excel
+library(openxlsx)
+wb <- createWorkbook()
+
+for (biomarker in names(all_models)) {
+  addWorksheet(wb, gsub("log_", "", biomarker))
+  writeData(wb, gsub("log_", "", biomarker), 
+            tidy(all_models[[biomarker]], conf.int = TRUE))
+}
+
+saveWorkbook(wb, "all_biomarker_models.xlsx", overwrite = TRUE)
+
+# ============================================================================
+# KEY CONSIDERATIONS FOR YOUR MODELS:
+# ============================================================================
+
+# 1. Log transformation: Most biomarkers are right-skewed, log-transform first
+# 2. Standardize predictors: Consider z-scoring continuous predictors for 
+#    easier interpretation and comparison of effect sizes
+# 3. Multiple testing correction: With multiple biomarkers, consider 
+#    Bonferroni or FDR correction
+# 4. Check assumptions: Normality, homoscedasticity, linearity
+# 5. Multicollinearity: Check VIF, especially if COGDRISK and LIBRA2 overlap
+# 6. Sample size: Need ~10-15 observations per predictor
+# 7. Missing data: Consider complete case vs multiple imputation
+
+# ============================================================================
+# BONUS: Standardized coefficients for comparison
+# ============================================================================
+
+# Standardize continuous predictors
+baseline_data_std <- baseline_data %>%
+  mutate(
+    across(c(cogdrisk_score, libra2_score, grs, age, education),
+           ~scale(.) %>% as.vector(),
+           .names = "{.col}_std")
+  )
+
+# Run model with standardized predictors
+model_std <- lm(
+  log_ptau217_simoa_UGOT ~ cogdrisk_score_std + libra2_score_std + 
+    grs_std + family_history + apoe_e4_carrier + age_std + sex + education_std,
+  data = baseline_data_std
+)
+
+# Now coefficients are directly comparable in magnitude
+tbl_regression(model_std)
+```
+
+
+
