@@ -1,0 +1,341 @@
+---
+title: "aim1_crosssectional"
+format: html
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warnings = FALSE)
+knitr::opts_knit$set(root.dir = here::here())
+```
+
+# Load packages and data
+```{r setting}
+library(broom)
+library(car)
+
+source('workflow/scripts/config.R')
+
+biomarkers <- readRDS(file.path(DATA_CLEANED_PATH$filtered, 
+                                "PREVENTAD_biomarkers_filtered.rds"))
+
+predictors_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_predictors.rds"))
+```
+
+
+# Get last measured biomarkers
+```{r}
+ptau217_last <- biomarkers %>%
+  group_by(CONP_ID) %>%
+  filter(!is.na(ptau217)) %>%
+  select(CONP_ID, Date_taken, age, ptau217) %>%
+  slice_tail() 
+
+other_biomarkers_last <- biomarkers %>%
+  group_by(CONP_ID) %>%
+  select(CONP_ID, all_of(BIOMARKERS)) %>%
+  select(-ptau217) %>%
+  filter_at(vars(-CONP_ID), all_vars(!is.na(.))) %>%
+  slice_tail() 
+
+all_dat <- predictors_dat %>% 
+  left_join((ptau217_last %>%
+               select(CONP_ID, ptau217)), by="CONP_ID") %>%
+  left_join(other_biomarkers_last, by="CONP_ID") %>%
+  column_to_rownames(var="CONP_ID")
+```
+
+
+
+
+# Defining models
+```{r}
+summary_list <- c()
+model_comparisons <- c()
+
+# Loop through biomarkers
+for (biomarker in BIOMARKERS){
+  cat("\n=== Processing:", biomarker, "===\n")
+  
+  data_temp <- all_dat %>%
+    mutate(log_biomarker = log(all_dat[[biomarker]]))
+  
+  # Model 1: demographics only
+  model1 <- lm(log_biomarker ~ Candidate_Age + Sex + BMI, data=data_temp)
+  
+  # Model 2: + genetics
+  model2 <- lm(log_biomarker ~ Candidate_Age + Sex + Education_years + apoe_category + GRS, data=data_temp)
+
+  # Model 3: + family history
+  model3 <- lm(log_biomarker~ Candidate_Age + Sex + Education_years + apoe_category + GRS + FDR_ext_AD, data=data_temp)
+
+  # Model 4: + LIBRA2
+  model4 <- lm(log_biomarker ~ Candidate_Age + Sex + Education_years + apoe_category + GRS + FDR_ext_AD + score_libra2, data=data_temp)
+
+  # Model 5: genetics + family history + CogDrisk
+  model5 <- lm(log_biomarker ~ apoe_category + GRS + FDR_ext_AD + score_cogd, data=data_temp)
+
+  # Model 6: genetics + family history + CogDrisk + LIBRA2
+  model6 <- lm(log_biomarker ~ apoe_category + GRS + FDR_ext_AD + score_cogd + score_libra2, data=data_temp)
+
+  # Model 7: demographics + genetics + family history + CogDrisk + LIBRA2
+  model7 <- lm(log_biomarker ~ Candidate_Age + Sex + Education_years + apoe_category + GRS + FDR_ext_AD + score_cogd + score_libra2, data=data_temp)
+
+  
+  results_temp <- bind_rows(
+    tidy(model1) %>% mutate(model = "model1"),
+    tidy(model2) %>% mutate(model = "model2"),
+    tidy(model3) %>% mutate(model = "model3"),
+    tidy(model4) %>% mutate(model = "model4"),
+    tidy(model5) %>% mutate(model = "model5"),
+    tidy(model6) %>% mutate(model = "model6")
+  ) %>% mutate(biomarker = biomarker)
+  
+  summary_list[[biomarker]] <- results_temp
+  print(results_temp)
+  
+  # comparison_temp <- tibble(
+  #   biomarker = biomarker,
+  #   model = c("model1", "model2", "model3", "model4", "model5", "model6"),
+  #   R2 = c(summary(model1)$r.squared, summary(model2)$r.squared, 
+  #          summary(model3)$r.squared, summary(model4)$r.squared, 
+  #          summary(model5)$r.squared, summary(model6)$r.squared),
+  #   Adj_R2 = c(summary(model1)$adj.r.squared, summary(model2)$adj.r.squared,
+  #              summary(model3)$adj.r.squared, summary(model4)$adj.r.squared,
+  #              summary(model5)$adj.r.squared, summary(model6)$adj.r.squared),
+  #   AIC = c(AIC(model1), AIC(model2), AIC(model3), AIC(model4), AIC(model5), AIC(model6)),
+  #   BIC = c(BIC(model1), BIC(model2), BIC(model3), BIC(model4), BIC(model5), BIC(model6))
+  # ) %>%
+  #   mutate(
+  #     delta_R2 = R2 - lag(R2),
+  #     delta_AIC = AIC - lag(AIC)
+  #   )
+  # 
+  # model_comparisons[[biomarker]] <- comparison_temp
+  # 
+  # print(comparison_temp)
+}
+```
+
+## Model 1: demographics
+- ptau231: adj r2 = 0.028, AIC = 593.17, BIC = 611.33
+
+## Model 2: demographics + genetics
+- AB ratio: adj r2 = 0.06, AIC = -51.45, BIC = -22.40
+- GFAP: adj r2 = 0.24, AIC = 310.49, BIC = 339.54
+- NFL: adj r2 = 0.21, AIC = 242.67, BIC = 271.71
+- ptau181: adj r2 = 0.09, AIC = 431.84, BIC = 460.89
+
+## Model 3: demographics + genetics + family history
+- ptau217: adj r2 = 0.1654, AIC = 392.56, BIC = 433.04
+
+
+## Stratified analyses by APOE category
+### e3/e3
+```{r}
+data_e3e3 <- all_dat %>% filter(apoe_category == "e3/e3")
+
+summary_list <- c()
+model_comparisons <- c()
+
+# Loop through biomarkers
+for (biomarker in BIOMARKERS){
+  cat("\n=== Processing:", biomarker, "===\n")
+  
+  data_temp <- data_e3e3 %>%
+    mutate(log_biomarker = log(data_e3e3[[biomarker]]))
+  
+  # Model 1: demographics only
+  model1 <- lm(log_biomarker ~ Candidate_Age + Sex + Education_years, data=data_temp)
+  # summary_list[[i]][1] <- summary(model1)
+  
+  # Model 2: + genetics
+  model2 <- lm(log_biomarker ~ Candidate_Age + Sex + Education_years + GRS, data=data_temp)
+  # summary_list[[i]][2] <- summary(model2)
+  
+  # Model 3: + family history
+  model3 <- lm(log_biomarker~ Candidate_Age + Sex + Education_years + GRS + FDR_ext_AD, data=data_temp)
+  # summary_list[[i]][3] <- summary(model3)
+  
+  # Model 4: + LIBRA2
+  model4 <- lm(log_biomarker ~ Candidate_Age + Sex + Education_years + GRS + FDR_ext_AD + score_libra2, data=data_temp)
+  # summary_list[[i]][4] <- summary(model4)
+  
+  # Model 5: genetics + family history + CogDrisk
+  model5 <- lm(log_biomarker ~ GRS + FDR_ext_AD + score_cogd, data=data_temp)
+  # summary_list[[i]][5] <- summary(model5)
+  
+  # Model 6: genetics + family history + CogDrisk + LIBRA2
+  model6 <- lm(log_biomarker ~ GRS + FDR_ext_AD + score_cogd + score_libra2, data=data_temp)
+  # summary_list[[i]][6] <- summary(model6)
+  
+  # Model 7: demographics + genetics + family history + CogDrisk + LIBRA2
+  model7 <- lm(log_biomarker ~ Candidate_Age + Sex + Education_years + GRS + FDR_ext_AD + score_cogd + score_libra2, data=data_temp)
+
+  
+  results_temp <- bind_rows(
+    tidy(model1) %>% mutate(model = "model1"),
+    tidy(model2) %>% mutate(model = "model2"),
+    tidy(model3) %>% mutate(model = "model3"),
+    tidy(model4) %>% mutate(model = "model4"),
+    tidy(model5) %>% mutate(model = "model5"),
+    tidy(model6) %>% mutate(model = "model6")
+  ) %>% mutate(biomarker = biomarker)
+  
+  summary_list[[biomarker]] <- results_temp
+  
+  comparison_temp <- tibble(
+    biomarker = biomarker,
+    model = c("model1", "model2", "model3", "model4", "model5", "model6"),
+    coeffs = c(summary(model1)$)
+    R2 = c(summary(model1)$r.squared, summary(model2)$r.squared, 
+           summary(model3)$r.squared, summary(model4)$r.squared, 
+           summary(model5)$r.squared, summary(model6)$r.squared),
+    Adj_R2 = c(summary(model1)$adj.r.squared, summary(model2)$adj.r.squared,
+               summary(model3)$adj.r.squared, summary(model4)$adj.r.squared,
+               summary(model5)$adj.r.squared, summary(model6)$adj.r.squared),
+    AIC = c(AIC(model1), AIC(model2), AIC(model3), AIC(model4), AIC(model5), AIC(model6)),
+    BIC = c(BIC(model1), BIC(model2), BIC(model3), BIC(model4), BIC(model5), BIC(model6))
+  ) %>%
+    mutate(
+      delta_R2 = R2 - lag(R2),
+      delta_AIC = AIC - lag(AIC)
+    )
+  
+  model_comparisons[[biomarker]] <- comparison_temp
+  
+  print(comparison_temp)
+}
+
+```
+For e2+:
+Model 5: genetics + family history + CogD
+- ptau 181: adj r2 = 0.11, AIC = 40.96, BIC = 50.12
+
+For e4+: 
+Model 4: demographics + genetics + family history + LIBRA2
+- NFL: adj r2 = 0.22, AIC = 92.92, BIC = 119.56
+- ptau 217: adj r2 = 0.12, AIC = 162.87, BIC = 190.05
+- ptau 231: adj r2 = 0.06, AIC = 223.15, BIC = 249.78
+
+
+# Other models:
+## CogDrisk (residualized version) 
+```{r}
+# Extract the non-demographic components of CogDRISK
+cogd_nondem <- residuals(
+  lm(score_cogd ~ Candidate_Age + Sex + Education_years, data = all_dat)
+)
+
+summary_list <- c()
+model_comparisons <- c()
+
+# Loop through biomarkers
+for (biomarker in BIOMARKERS){
+  cat("\n=== Processing:", biomarker, "===\n")
+  
+  data_temp <- all_dat %>%
+    mutate(log_biomarker = log(all_dat[[biomarker]]))
+  
+  model5.1 <- lm(log_biomarker ~ Candidate_Age + Sex + Education_years + apoe_category + GRS + 
+                   FDR_ext_AD + cogd_nondem, data=data_temp)
+  model6.1 <- lm(log_biomarker ~ Candidate_Age + Sex + Education_years + apoe_category + GRS + FDR_ext_AD +
+                   cogd_nondem + score_libra2, data=data_temp)
+
+  
+  results_temp <- bind_rows(
+    tidy(model5.1) %>% mutate(model = "model5.1"),
+    tidy(model6.1) %>% mutate(model = "model6.1")
+  ) %>% mutate(biomarker = biomarker)
+  
+  summary_list[[biomarker]] <- results_temp
+  
+  comparison_temp <- tibble(
+    biomarker = biomarker,
+    model = c("model5.1", "model6.1"),
+    R2 = c(summary(model5.1)$r.squared, summary(model6.1)$r.squared),
+    Adj_R2 = c(summary(model5.1)$adj.r.squared, summary(model6.1)$adj.r.squared),
+    AIC = c(AIC(model5.1), AIC(model6.1)),
+    BIC = c(BIC(model5.1), BIC(model6.1))
+  ) %>%
+    mutate(
+      delta_R2 = R2 - lag(R2),
+      delta_AIC = AIC - lag(AIC)
+    )
+  
+  model_comparisons[[biomarker]] <- comparison_temp
+  
+  print(comparison_temp)
+}
+```
+
+
+## Interactions
+```{r}
+summary_list <- c()
+model_comparisons <- c()
+
+# Loop through biomarkers
+for (biomarker in BIOMARKERS){
+  cat("\n=== Processing:", biomarker, "===\n")
+  
+  data_temp <- all_dat %>%
+    mutate(log_biomarker = log(all_dat[[biomarker]]))
+  
+  # Models 8: LIBRA2/CogD effect varying by APOE status
+  model8.1 <- lm(log_biomarker ~ Candidate_Age + Sex + Education_years + apoe_category * score_libra2 + 
+         GRS + FDR_ext_AD, data=data_temp)
+  model8.2 <- lm(log_biomarker ~ Candidate_Age + Sex + Education_years + GRS + FDR_ext_AD + 
+                   apoe_category * cogd_nondem + score_libra2, data=data_temp)
+
+  # Model 9: LIBRA2 effect varies by age
+  model9 <- lm(log_biomarker ~ Candidate_Age * score_libra2 + Sex + Education_years + apoe_category + 
+                 GRS + FDR_ext_AD, data=data_temp)
+
+  # Models 10: Clinical risk matters more in high genetic risk
+  model10.1 <- lm(log_biomarker ~ score_libra2 * GRS + Candidate_Age + Sex + Education_years + 
+                    apoe_category + FDR_ext_AD, data=data_temp)
+  model10.2 <- lm(log_biomarker ~ score_cogd * GRS + apoe_category + FDR_ext_AD, data=data_temp)
+  model10.3 <- lm(log_biomarker ~ cogd_nondem * GRS + Candidate_Age + Sex + Education_years + 
+                    apoe_category + FDR_ext_AD, data=data_temp)
+
+  
+  results_temp <- bind_rows(
+    tidy(model8.1) %>% mutate(model = "model8.1"),
+    tidy(model8.2) %>% mutate(model = "model8.2"),
+    tidy(model9) %>% mutate(model = "model9"),
+    tidy(model10.1) %>% mutate(model = "model10.1"),
+    tidy(model10.2) %>% mutate(model = "model10.2"),
+    tidy(model10.3) %>% mutate(model = "model10.3")
+  ) %>% mutate(biomarker = biomarker)
+  
+  summary_list[[biomarker]] <- results_temp
+  
+  comparison_temp <- tibble(
+    biomarker = biomarker,
+    model = c("model8.1", "model8.2", "model9", "model10.1", "model10.2", "model10.3"),
+    R2 = c(summary(model8.1)$r.squared, summary(model8.2)$r.squared, 
+           summary(model9)$r.squared, summary(model10.1)$r.squared, 
+           summary(model10.2)$r.squared, summary(model10.3)$r.squared),
+    Adj_R2 = c(summary(model8.1)$adj.r.squared, summary(model8.2)$adj.r.squared,
+               summary(model9)$adj.r.squared, summary(model10.1)$adj.r.squared,
+               summary(model10.2)$adj.r.squared, summary(model10.3)$adj.r.squared),
+    AIC = c(AIC(model8.1), AIC(model8.2), AIC(model9), AIC(model10.1), AIC(model10.2), AIC(model10.3)),
+    BIC = c(BIC(model8.1), BIC(model8.2), BIC(model9), BIC(model10.1), BIC(model10.2), BIC(model10.3)),
+    beta = c(summary(model8.1)$Estimate, summary(model8.2)$Estimate,
+               summary(model9)$Estimate, summary(model10.1)$Estimate,
+               summary(model10.2)$Estimate, summary(model10.3)$Estimate)
+  ) %>%
+    mutate(
+      delta_R2 = R2 - lag(R2),
+      delta_AIC = AIC - lag(AIC)
+    )
+  
+  model_comparisons[[biomarker]] <- comparison_temp
+  
+  print(comparison_temp)
+}
+```
+
+Models 8: LIBRA2 (1)/CogD(2) effect varying by APOE status
+Model 9: LIBRA2 effect varying by age
+Models 10: LIBRA2 (1)/CogD(2) effect varying by GRS

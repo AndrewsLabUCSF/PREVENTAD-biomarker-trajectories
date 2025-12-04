@@ -1,15 +1,22 @@
 
 # LOAD PACKAGES -----------------------------------------------------------
 pacman::p_load(tidyr, dplyr, ggplot2, gtsummary, gt, here, tidyverse, data.table,
-               lubridate)
+               lubridate, ggpubr, jtools, lme4, forcats, glue, ggsci)
 
 
 # FUNCTIONS ---------------------------------------------------------------
 FUNCTIONS_PATH <- here("workflow", "scripts", "functions")
+
 COGD_RECODE_FN <- file.path(FUNCTIONS_PATH, "CogDrisk_recode.R")
 LIBRA_RECODE_FN <- file.path(FUNCTIONS_PATH, "LIBRA_recode.R")
 CRS_FN <- file.path(FUNCTIONS_PATH, "CRS.R")
+PLOT_FN <- file.path(FUNCTIONS_PATH, "functions_plot.R")
 
+
+# BIOMARKER NAMES ---------------------------------------------------------
+BIOMARKER_VARS <- c("AB_ratio_simoa_4plex", "GFAP_simoa_4plex", "NFL_simoa_4plex",
+                    "ptau181_simoa_UGOT", "ptau217_simoa_UGOT", "ptau231_simoa_UGOT")
+BIOMARKERS <- c("ab_ratio", "gfap", "nfl", "ptau181", "ptau217", "ptau231")
 
 
 
@@ -26,13 +33,14 @@ AIM1_OUTPUT_PATH <- list(
 
 DATA_INTERMEDIATE_PATH <- here("data", "intermediate")
 
+DATA_CLEANED_PATH <- list(
+  cleaned = here("data", "cleaned"),
+  filtered = here("data", "cleaned", "filtered")
+)
+
 DATA_OUTPUT_PATHS <- list(
   output = list(
     figures = here("results", "figures"),
     tables = here("results", "tables")
-  ),
-  data = list(
-    intermediate = here("data", "intermediate"),
-    cleaned = here("data", "cleaned")
   )
 )

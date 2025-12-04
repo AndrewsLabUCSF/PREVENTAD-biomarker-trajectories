@@ -18,9 +18,6 @@ names(PREVENTAD_dat) <- c("AD8", "auditory", "bp_pulse_weight", "diagnosis",
                           "lab", "meduse", "plasma_4plex", "plasma_ptau217", 
                           "questionnaire")
 
-# view1 <- PREVENTAD_dat$meduse %>%
-#   group_by(CONP_ID) %>%
-#   slice(1)
 
 # VARIABLE SELECTION ----------------------------------------------------
 # Clinical
@@ -128,69 +125,24 @@ lifestyle_raw <- PREVENTAD_dat$demographics %>%
                slice(1)),
             by="CONP_ID")
 
-
-# Genetics
-genetics <- PREVENTAD_dat$genetics %>%
-  mutate(
-    # Clean up any spacing issues
-    apoe_genotype = str_replace_all(APOE, " ", ""),  # Remove spaces
-    
-    # Extract individual alleles
-    allele1 = as.numeric(str_extract(apoe_genotype, "^\\d")),  # First number
-    allele2 = as.numeric(str_extract(apoe_genotype, "\\d$")),  # Last number
-    
-    # Count alleles (primary variable for analysis)
-    apoe_e2_count = (allele1 == 2) + (allele2 == 2),
-    apoe_e3_count = (allele1 == 3) + (allele2 == 3),
-    apoe_e4_count = (allele1 == 4) + (allele2 == 4),
-    
-    # e4 carrier status (binary)
-    apoe_e4_carrier = if_else(apoe_e4_count > 0, 1, 0),
-    
-    # e4 carrier status (labeled factor for plots)
-    apoe_e4_status = factor(apoe_e4_count,
-                            levels = 0:2,
-                            labels = c("Non-carrier", "One e4", "Two e4")),
-    
-    # APOE category
-    apoe_category = case_when(
-      apoe_genotype == "32" ~ "e2+",
-      apoe_genotype == "33" ~ "e3/e3",
-      apoe_genotype %in% c("42", "43", "44") ~ "e4+",
-      TRUE ~ NA
-      )
-  ) %>%
-  select(-c(allele1, allele2))
-
-apoe <- genetics %>%
-  select(CONP_ID, starts_with("apoe_"))
-
-
 # Biomarker table
 biomarkers <- PREVENTAD_dat$plasma_4plex %>%
   full_join(PREVENTAD_dat$plasma_ptau217, 
             by=c("CONP_ID", "CONP_CandID", "Study_visit_label", "Visit_label", 
                  "Date_taken", "Candidate_Age")) %>%
-  mutate(Candidate_Age = Candidate_Age/12) %>%
   arrange(CONP_ID)
 
 
 # Save intermediate datasets
 saveRDS(clinical_raw, 
-        file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_clinical_raw.rds"))
+        file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_clinical_raw.rds"))
 saveRDS(lifestyle_raw, 
-        file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_lifestyle_raw.rds"))
+        file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_lifestyle_raw.rds"))
 saveRDS(fhx_raw,
-         file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_fhx_raw.rds"))
-saveRDS(genetics,
-        file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_genetics.rds"))
+         file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_fhx_raw.rds"))
 saveRDS(diagnosis,
         file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_diagnosis.rds"))
-saveRDS(PREVENTAD_dat$GWAS,
-        file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_GWAS.rds"))
-saveRDS(apoe,
-        file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_apoe.rds"))
 saveRDS(biomarkers,
-        file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_biomarkers.rds"))
+        file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_biomarkers.rds"))
 saveRDS(PREVENTAD_dat, 
-        file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_dat.rds"))
+        file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_dat.rds"))

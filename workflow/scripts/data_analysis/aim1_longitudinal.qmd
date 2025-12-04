@@ -1,0 +1,182 @@
+---
+title: "aim1_longitudinal"
+format: html
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warnings = FALSE)
+knitr::opts_knit$set(root.dir = here::here())
+```
+
+# Load packages and data
+```{r setting}
+library(broom)
+library(car)
+
+source('workflow/scripts/config.R')
+
+apoe <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_apoe.rds"))
+biomarkers <- readRDS(file.path(DATA_CLEANED_PATH$filtered, 
+                                "PREVENTAD_biomarkers_filtered.rds"))
+clinical <- readRDS(file.path(DATA_CLEANED_PATH$filtered, "PREVENTAD_clinical_imp_filtered_raw.rds"))
+cogd_dat <- readRDS(file.path(DATA_CLEANED_PATH$cleaned, "PREVENTAD_cogd_scored_dat.rds"))
+diagnosis <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_diagnosis.rds"))
+fhx <- readRDS(file.path(DATA_CLEANED_PATH$filtered, 
+                         "PREVENTAD_fhx_filtered.rds"))
+grs <- readRDS(file.path(DATA_CLEANED_PATH$cleaned, "PREVENTAD_GRS.rds"))
+libra_dat <- readRDS(file.path(DATA_CLEANED_PATH$cleaned, "PREVENTAD_libra_scored_dat.rds"))
+
+predictors_dat <- grs %>%
+  left_join((clinical %>%
+               select(CONP_ID, Candidate_Age, Sex, Education_years) %>%
+               mutate(Candidate_Age = Candidate_Age/12)),
+            by="CONP_ID") %>%
+  left_join(apoe, by="CONP_ID") %>%
+  left_join((cogd_dat %>% 
+               select(CONP_ID, score_cogd)),
+            by="CONP_ID") %>%
+  left_join(fhx, by="CONP_ID") %>%
+  left_join((libra_dat %>% 
+               select(CONP_ID, score_libra2)),
+            by="CONP_ID") %>%
+  select(CONP_ID, Candidate_Age, Sex, Education_years, apoe_category, 
+         score_cogd, GRS, score_libra2, FDR_ext_AD)
+
+biomarkers_longit <- biomarkers %>%
+  group_by(CONP_ID) %>%
+  #arrange(visit_date) %>%
+  mutate(
+    baseline_date = first(Date_taken),
+    time = interval(ym(baseline_date), ym(Date_taken)) / years(1),
+    baseline_age = first(Candidate_Age)
+  ) %>%
+  ungroup() %>%
+  relocate(baseline_date, .after=Date_taken) %>%
+  relocate(time, .after=baseline_date) %>%
+  select(CONP_ID, time, BIOMARKERS)
+```
+
+
+# Get last measured biomarkers
+```{r}
+ptau217_last <- biomarkers %>%
+  group_by(CONP_ID) %>%
+  filter(!is.na(ptau217_simoa_UGOT)) %>%
+  select(CONP_ID, Date_taken, Candidate_Age, ptau217_simoa_UGOT) %>%
+  slice_tail() 
+
+other_biomarkers_last <- biomarkers %>%
+  group_by(CONP_ID) %>%
+  select(CONP_ID, BIOmodelARKERS) %>%
+  select(-ptau217_simoa_UGOT) %>%
+  filter_at(vars(-CONP_ID), all_vars(!is.na(.))) %>%
+  slice_tail() 
+
+all_dat <- biomarkers_longit %>%
+  left_join(predictors_dat, by="CONP_ID") 
+```
+
+
+
+```{r}
+longitudinal_results <- list()
+
+# Loop through each biomarker
+for (biomarker in BIOMARKERS) {
+  
+  cat("\n=== Longitudinal Analysis:", biomarker, "===\n")
+  
+  # Create log-transformed variable
+  data_temp <- all_dat %>%
+    mutate(log_biomarker = log(.data[[biomarker]]))
+  
+  # Model 1: Time only (baseline trajectory)
+  L1 <- lmer(log_biomarker ~ time + Candidate_Age + Sex + Education_years + 
+             (1 + time | CONP_ID),
+             data = data_temp,
+             REML = FALSE)
+  
+  # Model 2: Add genetics (no interactions)
+  L2 <- lmer(log_biomarker ~ time + Candidate_Age + Sex + Education_years + 
+             apoe_category + GRS + FDR_ext_AD +
+             (1 + time | CONP_ID),
+             data = data_temp,
+             REML = FALSE)
+  
+  # Model 3: Add clinical risk scores (no interactions)
+  L3 <- lmer(log_biomarker ~ time + Candidate_Age + Sex + Education_years + 
+             apoe_category + GRS + FDR_ext_AD + score_libra2 + score_cogd +
+             (1 + time | CONP_ID),
+             data = data_temp,
+             REML = FALSE)
+  
+  # Model 4: Test if risk factors predict RATE OF CHANGE
+  # This is the key model for your hypothesis!
+  L4 <- lmer(log_biomarker ~ time * (score_cogd + apoe_category + GRS + FDR_ext_AD) +
+             #Candidate_Age + Sex + Education_years +
+             (1 + time | CONP_ID),
+             data = data_temp,
+             REML = FALSE)
+  
+  # Extract results
+  results_temp <- bind_rows(
+    tidy(L1, effects = "fixed") %>% mutate(model = "L1_Time"),
+    tidy(L2, effects = "fixed") %>% mutate(model = "L2_+Genetics"),
+    tidy(L3, effects = "fixed") %>% mutate(model = "L3_+ClinicalRisk"),
+    tidy(L4, effects = "fixed") %>% mutate(model = "L4_Interactions")
+  ) %>%
+    mutate(biomarker = biomarker)
+  
+  longitudinal_results[[biomarker]] <- results_temp
+  
+  # Model comparison
+  comparison <- anova(L1, L2, L3, L4)
+  cat("\nModel Comparison:\n")
+  print(comparison)
+  
+  # Extract key interaction terms from L4
+  L4_coef <- summary(L4)$coefficients
+  
+  # Convert to dataframe and handle column names dynamically
+  L4_summary <- as.data.frame(L4_coef) %>%
+    rownames_to_column("term") %>%
+    filter(str_detect(term, "time:"))
+  
+  # Standardize column names based on what's available
+  # Typical formats: [Estimate, Std.Error, t value, df, Pr(>|t|)]
+  # or: [Estimate, Std.Error, t value, Pr(>|t|)]
+  ncol_coef <- ncol(L4_summary) - 1  # Subtract 1 for 'term' column
+  
+  if(ncol_coef == 5) {
+    # Format: Estimate, Std.Error, t value, df, Pr(>|t|)
+    colnames(L4_summary) <- c("term", "estimate", "std.error", "statistic", "df", "p.value")
+  } else if(ncol_coef == 4) {
+    # Format: Estimate, Std.Error, t value, Pr(>|t|)
+    colnames(L4_summary) <- c("term", "estimate", "std.error", "statistic", "p.value")
+  } else if(ncol_coef == 3) {
+    # Format: Estimate, Std.Error, t value (no p-values)
+    colnames(L4_summary) <- c("term", "estimate", "std.error", "statistic")
+    # Calculate p-values manually
+    L4_summary <- L4_summary %>%
+      mutate(p.value = 2 * pt(abs(statistic), df = Inf, lower.tail = FALSE))
+  }
+  
+  interactions <- L4_summary %>%
+    select(term, estimate, std.error, statistic, p.value) %>%
+    mutate(
+      significant = case_when(
+        p.value < 0.001 ~ "***",
+        p.value < 0.01 ~ "**",
+        p.value < 0.05 ~ "*",
+        TRUE ~ ""
+      ),
+      biomarker = biomarker
+    )
+  
+  cat("\nKey Time Interactions (predictors of rate of change):\n")
+  print(interactions)
+}
+
+# Combine all results
+all_longitudinal <- bind_rows(longitudinal_results)
+```
