@@ -28,7 +28,8 @@ EDA_OUTPUT_PATH <- list(
 
 AIM1_OUTPUT_PATH <- list(
   figures = here("results", "Aim1", "figures"),
-  tables = here("results", "Aim1", "tables")
+  tables = here("results", "Aim1", "tables"),
+  stratified = here("results", "Aim1", "stratified")
 )
 
 DATA_INTERMEDIATE_PATH <- here("data", "intermediate")

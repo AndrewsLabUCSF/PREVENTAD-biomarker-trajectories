@@ -15,7 +15,6 @@ library(car)
 library(patchwork)
 
 source('workflow/scripts/config.R')
-source(PLOT_FN)
 
 biomarkers <- readRDS(file.path(DATA_CLEANED_PATH$filtered, 
                                 "PREVENTAD_biomarkers_filtered.rds"))
