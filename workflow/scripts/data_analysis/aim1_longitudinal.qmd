@@ -12,171 +12,174 @@ knitr::opts_knit$set(root.dir = here::here())
 ```{r setting}
 library(broom)
 library(car)
+library(patchwork)
 
 source('workflow/scripts/config.R')
 
-apoe <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_apoe.rds"))
 biomarkers <- readRDS(file.path(DATA_CLEANED_PATH$filtered, 
                                 "PREVENTAD_biomarkers_filtered.rds"))
-clinical <- readRDS(file.path(DATA_CLEANED_PATH$filtered, "PREVENTAD_clinical_imp_filtered_raw.rds"))
-cogd_dat <- readRDS(file.path(DATA_CLEANED_PATH$cleaned, "PREVENTAD_cogd_scored_dat.rds"))
+
+predictors_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_predictors.rds"))
 diagnosis <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_diagnosis.rds"))
-fhx <- readRDS(file.path(DATA_CLEANED_PATH$filtered, 
-                         "PREVENTAD_fhx_filtered.rds"))
-grs <- readRDS(file.path(DATA_CLEANED_PATH$cleaned, "PREVENTAD_GRS.rds"))
-libra_dat <- readRDS(file.path(DATA_CLEANED_PATH$cleaned, "PREVENTAD_libra_scored_dat.rds"))
 
-predictors_dat <- grs %>%
-  left_join((clinical %>%
-               select(CONP_ID, Candidate_Age, Sex, Education_years) %>%
-               mutate(Candidate_Age = Candidate_Age/12)),
-            by="CONP_ID") %>%
-  left_join(apoe, by="CONP_ID") %>%
-  left_join((cogd_dat %>% 
-               select(CONP_ID, score_cogd)),
-            by="CONP_ID") %>%
-  left_join(fhx, by="CONP_ID") %>%
-  left_join((libra_dat %>% 
-               select(CONP_ID, score_libra2)),
-            by="CONP_ID") %>%
-  select(CONP_ID, Candidate_Age, Sex, Education_years, apoe_category, 
-         score_cogd, GRS, score_libra2, FDR_ext_AD)
+all_dat <- biomarkers %>%
+  left_join(predictors_dat, by = "CONP_ID") %>%
+  mutate(gfap_log = log(gfap),
+         nfl_log = log(nfl),
+         ptau181_log = log(ptau181),
+         ptau217_log = log(ptau217),
+         ptau231_sqrt = sqrt(ptau231)) #%>%
+  # column_to_rownames(var="CONP_ID")
 
-biomarkers_longit <- biomarkers %>%
-  group_by(CONP_ID) %>%
-  #arrange(visit_date) %>%
+ggplot(grs, aes(x = GRS)) +
+  geom_density() 
+```
+
+
+# LMM - Longitudinal
+```{r}
+outcomes <- c("ab_ratio", "gfap_log", "nfl_log", "ptau181_log", "ptau217_log", "ptau231_sqrt")
+
+models <- tribble(
+  ~model, ~predictors,
+  "model0", "years + baseline_age + sex + BMI + (1 | CONP_ID)",
+  "model1", "years + baseline_age + sex + BMI + apoe + GRS + family_history + (1 | CONP_ID)",
+  "model2", "years * (baseline_age + sex + BMI + apoe + GRS + family_history) + score_libra2 + (1 | CONP_ID)",
+  "model3", "years * (baseline_age + sex + BMI + apoe + GRS + family_history + score_libra2 + score_cogd) + (1 | CONP_ID)"
+)
+
+long_preventad <- expand_grid(
+  outcome = outcomes,
+  models
+) %>%
   mutate(
-    baseline_date = first(Date_taken),
-    time = interval(ym(baseline_date), ym(Date_taken)) / years(1),
-    baseline_age = first(Candidate_Age)
-  ) %>%
-  ungroup() %>%
-  relocate(baseline_date, .after=Date_taken) %>%
-  relocate(time, .after=baseline_date) %>%
-  select(CONP_ID, time, BIOMARKERS)
+    eq = glue("{outcome} ~ {predictors}"),
+    res = map(eq, ~lmer(as.formula(.), data = all_dat, REML = FALSE)),
+    dataf = map(res, tidy),
+    mod = map(res, glance)
+  )
 ```
 
 
-# Get last measured biomarkers
+# Results
 ```{r}
-ptau217_last <- biomarkers %>%
-  group_by(CONP_ID) %>%
-  filter(!is.na(ptau217_simoa_UGOT)) %>%
-  select(CONP_ID, Date_taken, Candidate_Age, ptau217_simoa_UGOT) %>%
-  slice_tail() 
-
-other_biomarkers_last <- biomarkers %>%
-  group_by(CONP_ID) %>%
-  select(CONP_ID, BIOmodelARKERS) %>%
-  select(-ptau217_simoa_UGOT) %>%
-  filter_at(vars(-CONP_ID), all_vars(!is.na(.))) %>%
-  slice_tail() 
-
-all_dat <- biomarkers_longit %>%
-  left_join(predictors_dat, by="CONP_ID") 
-```
-
-
-
-```{r}
-longitudinal_results <- list()
-
-# Loop through each biomarker
-for (biomarker in BIOMARKERS) {
-  
-  cat("\n=== Longitudinal Analysis:", biomarker, "===\n")
-  
-  # Create log-transformed variable
-  data_temp <- all_dat %>%
-    mutate(log_biomarker = log(.data[[biomarker]]))
-  
-  # Model 1: Time only (baseline trajectory)
-  L1 <- lmer(log_biomarker ~ time + Candidate_Age + Sex + Education_years + 
-             (1 + time | CONP_ID),
-             data = data_temp,
-             REML = FALSE)
-  
-  # Model 2: Add genetics (no interactions)
-  L2 <- lmer(log_biomarker ~ time + Candidate_Age + Sex + Education_years + 
-             apoe_category + GRS + FDR_ext_AD +
-             (1 + time | CONP_ID),
-             data = data_temp,
-             REML = FALSE)
-  
-  # Model 3: Add clinical risk scores (no interactions)
-  L3 <- lmer(log_biomarker ~ time + Candidate_Age + Sex + Education_years + 
-             apoe_category + GRS + FDR_ext_AD + score_libra2 + score_cogd +
-             (1 + time | CONP_ID),
-             data = data_temp,
-             REML = FALSE)
-  
-  # Model 4: Test if risk factors predict RATE OF CHANGE
-  # This is the key model for your hypothesis!
-  L4 <- lmer(log_biomarker ~ time * (score_cogd + apoe_category + GRS + FDR_ext_AD) +
-             #Candidate_Age + Sex + Education_years +
-             (1 + time | CONP_ID),
-             data = data_temp,
-             REML = FALSE)
-  
-  # Extract results
-  results_temp <- bind_rows(
-    tidy(L1, effects = "fixed") %>% mutate(model = "L1_Time"),
-    tidy(L2, effects = "fixed") %>% mutate(model = "L2_+Genetics"),
-    tidy(L3, effects = "fixed") %>% mutate(model = "L3_+ClinicalRisk"),
-    tidy(L4, effects = "fixed") %>% mutate(model = "L4_Interactions")
+res_long_preventad <- bind_rows(
+  select(long_preventad, model, outcome, dataf)
+) %>%
+  unnest(dataf) %>%
+  # unnest(res) %>%
+  filter(
+    str_detect(term, '^time|^GRS|^family_history|^score_libra2|^score_cogd|^baseline_age|^sex|^BMI|^apoe')
   ) %>%
-    mutate(biomarker = biomarker)
-  
-  longitudinal_results[[biomarker]] <- results_temp
-  
-  # Model comparison
-  comparison <- anova(L1, L2, L3, L4)
-  cat("\nModel Comparison:\n")
-  print(comparison)
-  
-  # Extract key interaction terms from L4
-  L4_coef <- summary(L4)$coefficients
-  
-  # Convert to dataframe and handle column names dynamically
-  L4_summary <- as.data.frame(L4_coef) %>%
-    rownames_to_column("term") %>%
-    filter(str_detect(term, "time:"))
-  
-  # Standardize column names based on what's available
-  # Typical formats: [Estimate, Std.Error, t value, df, Pr(>|t|)]
-  # or: [Estimate, Std.Error, t value, Pr(>|t|)]
-  ncol_coef <- ncol(L4_summary) - 1  # Subtract 1 for 'term' column
-  
-  if(ncol_coef == 5) {
-    # Format: Estimate, Std.Error, t value, df, Pr(>|t|)
-    colnames(L4_summary) <- c("term", "estimate", "std.error", "statistic", "df", "p.value")
-  } else if(ncol_coef == 4) {
-    # Format: Estimate, Std.Error, t value, Pr(>|t|)
-    colnames(L4_summary) <- c("term", "estimate", "std.error", "statistic", "p.value")
-  } else if(ncol_coef == 3) {
-    # Format: Estimate, Std.Error, t value (no p-values)
-    colnames(L4_summary) <- c("term", "estimate", "std.error", "statistic")
-    # Calculate p-values manually
-    L4_summary <- L4_summary %>%
-      mutate(p.value = 2 * pt(abs(statistic), df = Inf, lower.tail = FALSE))
-  }
-  
-  interactions <- L4_summary %>%
-    select(term, estimate, std.error, statistic, p.value) %>%
-    mutate(
-      significant = case_when(
-        p.value < 0.001 ~ "***",
-        p.value < 0.01 ~ "**",
-        p.value < 0.05 ~ "*",
-        TRUE ~ ""
-      ),
-      biomarker = biomarker
+  # Optional: filter for specific model
+  # filter(model == 'L3') %>%
+  arrange(outcome, model, term) %>%
+  mutate(
+    # Significance flag
+    sig = ifelse(p.value < 0.05, TRUE, FALSE),
+    
+    # Confidence intervals
+    conf.low = estimate - (std.error * 1.96),
+    conf.high = estimate + (std.error * 1.96),
+    
+    # Exponentiated values for log-transformed outcomes
+    exp_est = case_when(
+      str_detect(outcome, "_log$") ~ exp(estimate),
+      TRUE ~ NA_real_
+    ),
+    exp_lci = case_when(
+      str_detect(outcome, "_log$") ~ exp(conf.low),
+      TRUE ~ NA_real_
+    ),
+    exp_uci = case_when(
+      str_detect(outcome, "_log$") ~ exp(conf.high),
+      TRUE ~ NA_real_
+    ),
+    pct_change = case_when(
+      str_detect(outcome, "_log$") ~ (exp_est - 1) * 100,
+      TRUE ~ NA_real_
+    ),
+    
+    # Result category
+    res = case_when(
+      sig == TRUE ~ "Significant",
+      sig == FALSE ~ "Not Significant"
+    ),
+    
+    # Significance stars
+    stars = case_when(
+      p.value >= 0.05 ~ "",
+      p.value >= 0.01 & p.value < 0.05 ~ "*",
+      p.value >= 0.001 & p.value < 0.01 ~ "**",
+      p.value < 0.001 ~ "***"
+    ),
+    
+    # Categorize predictors
+    category = case_when(
+      term == "age" ~ "Demographics",
+      term %in% c("sexMale", "sex") ~ "Demographics",
+      term == "BMI" ~ "Demographics",
+      str_detect(term, "^apoe") ~ "Genetics",
+      term == "GRS" ~ "Genetics",
+      str_detect(term, "^family_history") ~ "Family History",
+      term == "score_libra2" ~ "LIBRA2",
+      term == "score_cogd" ~ "CogDrisk",
+      TRUE ~ "Other"
     )
-  
-  cat("\nKey Time Interactions (predictors of rate of change):\n")
-  print(interactions)
-}
+  ) %>%
+  # Round numeric values
+  mutate(across(c(estimate, std.error, statistic, p.value, df,
+                  conf.low, conf.high, exp_est, exp_lci, exp_uci, pct_change), 
+                ~round(., digits = 3)))
+```
 
-# Combine all results
-all_longitudinal <- bind_rows(longitudinal_results)
+```{r}
+res_table <- res_long_preventad %>% 
+  filter(model == "model3") %>%
+  #filter(model %in% c("model0")) %>%
+  select(outcome, model, term, estimate, std.error, statistic, p.value, stars) %>% 
+  pivot_wider(
+    names_from = outcome,
+    names_sep = "_",
+    values_from = c(estimate, std.error, statistic, p.value, stars)
+  ) %>%
+  select(-model) %>%
+  gt() %>% 
+  tab_spanner(
+    label = md("**AB42/40**"),
+    columns = ends_with("ab_ratio")
+  ) %>%
+  tab_spanner(
+    label = md("**GFAP**"),
+    columns = ends_with("gfap_log")
+  ) %>%
+  tab_spanner(
+    label = md("**NfL**"),
+    columns = ends_with("nfl_log")
+  ) %>%
+  tab_spanner(
+    label = md("**ptau181**"),
+    columns = ends_with("ptau181_log")
+  ) %>%
+  tab_spanner(
+    label = md("**ptau217**"),
+    columns = ends_with("ptau217_log")
+  ) %>%
+  tab_spanner(
+    label = md("**ptau231**"),
+    columns = ends_with("ptau231_sqrt")
+  ) %>%
+  cols_label(
+    starts_with("estimate")~ md("*Beta*"),
+    starts_with("std.error")~ md("*SE*"),
+    starts_with("statistic")~md("*Statistic*"),
+    starts_with("p.value")~ md("*p.value*"),
+    starts_with("stars")~""
+  )
+res_table
+
+gtsave(res_table, 
+       vwidth = 2000,
+       filename = "PREVENTAD_model5.png", 
+       path = AIM1_OUTPUT_PATH$tables)
 ```

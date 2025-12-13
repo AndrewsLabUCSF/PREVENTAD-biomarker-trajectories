@@ -94,7 +94,7 @@ apoe_preventad <- expand_grid(
   apoe_group = names(apoe_dat),
   outcome = outcomes,
   models
-) %>%
+  ) %>%
   mutate(
     data_to_use = map(apoe_group, ~apoe_dat[[.]]),
     eq = glue("{outcome} ~ {predictors}"),

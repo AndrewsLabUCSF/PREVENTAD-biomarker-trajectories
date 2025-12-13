@@ -1,5 +1,6 @@
 ---
-title: "aim1_crosssectional"
+title: "Aim 1: Cross-sectional Analyses"
+author: Michelle Li
 format: html
 ---
 
@@ -8,7 +9,6 @@ knitr::opts_chunk$set(echo = FALSE, message = FALSE, warnings = FALSE)
 knitr::opts_knit$set(root.dir = here::here())
 ```
 
-# Load packages and data
 ```{r setting}
 library(broom)
 library(car)
@@ -22,9 +22,7 @@ biomarkers <- readRDS(file.path(DATA_CLEANED_PATH$filtered,
 predictors_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_predictors.rds"))
 ```
 
-
-# Get last measured biomarkers
-```{r}
+```{r biomarker-data}
 ptau217_last <- biomarkers %>%
   group_by(CONP_ID) %>%
   filter(!is.na(ptau217)) %>%
@@ -48,27 +46,11 @@ all_dat <- predictors_dat %>%
          ptau217_log = log(ptau217),
          ptau231_sqrt = sqrt(ptau231)) %>%
   column_to_rownames(var="CONP_ID")
-
-all_dat_longer <- all_dat %>%
-  pivot_longer(
-    cols = BIOMARKERS,
-    names_to = "biomarker",
-    values_to = "measure"
-  ) %>%
-  # mutate(measure_norm = if_else(biomarker == "ab_ratio", measure, log(measure)))
-  mutate(measure_norm = case_when(
-    biomarker == "ab_ratio" ~ measure,
-    #biomarker == "gfap" ~ sqrt(measure),
-    #
-    biomarker == "ptau231" ~ sqrt(measure),
-    #biomarker == "ptau217" ~ sign(measure) * abs(measure)^(1/3),
-    #biomarker != "ab_ratio" | biomarker != "ptau231" ~ ,
-    TRUE ~ log(measure)))
 ```
 
 
 # Regression - All Models
-```{r}
+```{r regression}
 outcomes <- c("ab_ratio", "gfap_log", "nfl_log", "ptau181_log", "ptau217_log", "ptau231_sqrt")
 
 models <- tribble(~model, ~predictors,
@@ -76,35 +58,26 @@ models <- tribble(~model, ~predictors,
                   "model1", "age + sex + BMI + GRS + apoe",
                   "model2", "age + sex + BMI + GRS + apoe + family_history",
                   "model3", "age + sex + BMI + GRS + apoe + family_history + score_libra2",
-                  "model4", "age + sex + BMI + GRS + apoe + family_history + score_cogd",
-                  "model5", "age + sex + BMI + GRS + apoe + family_history + score_cogd + score_libra2") 
+                  "model4", "GRS + apoe + family_history + score_cogd") 
 
 all_preventad <- expand_grid(
   outcome = outcomes,
   models
-) %>%
+  ) %>%
   mutate(
     eq = glue("{outcome} ~ {predictors}"),
     res = map(eq, ~lm(as.formula(.), data = all_dat)),
     dataf = map(res, tidy),
     mod = map(res, glance)
   )
-
-all_preventad
 ```
 
-
-# Results
-```{r}
-res_all_preventad <- bind_rows(
-  select(all_preventad, model, outcome, dataf)
-) %>%
+```{r regression-results}
+res_all_preventad <- bind_rows(select(all_preventad, model, outcome, dataf)) %>%
   unnest(dataf) %>%
-  # Filter for specific terms of interest
   filter(
     str_detect(term, '^GRS|^family_history|^score_libra2|^score_cogd|^age|^sex|^BMI|^apoe')
   ) %>%
-  # filter(model == 'model5') %>%
   arrange(outcome, term, estimate) %>%
   mutate(
     # Significance flag
@@ -163,112 +136,126 @@ res_all_preventad <- bind_rows(
                 ~round(., digits = 3)))
 ```
 
-
-```{r}
-res_table <- res_all_preventad %>% 
-  filter(model == "model5") %>%
-  #filter(model %in% c("model0")) %>%
-  select(outcome, model, term, estimate, std.error, statistic, p.value, stars) %>% 
-  pivot_wider(
-    names_from = outcome,
-    names_sep = "_",
-    values_from = c(estimate, std.error, statistic, p.value, stars)
-  ) %>%
-  select(-model) %>%
-  gt() %>% 
-  tab_spanner(
-    label = md("**AB42/40**"),
-    columns = ends_with("ab_ratio")
-  ) %>%
-  tab_spanner(
-    label = md("**GFAP**"),
-    columns = ends_with("gfap_log")
-  ) %>%
-  tab_spanner(
-    label = md("**NfL**"),
-    columns = ends_with("nfl_log")
-  ) %>%
-  tab_spanner(
-    label = md("**ptau181**"),
-    columns = ends_with("ptau181_log")
-  ) %>%
-  tab_spanner(
-    label = md("**ptau217**"),
-    columns = ends_with("ptau217_log")
-  ) %>%
-  tab_spanner(
-    label = md("**ptau231**"),
-    columns = ends_with("ptau231_sqrt")
-  ) %>%
-  cols_label(
-    starts_with("estimate")~ md("*Beta*"),
-    starts_with("std.error")~ md("*SE*"),
-    starts_with("statistic")~md("*Statistic*"),
-    starts_with("p.value")~ md("*p.value*"),
-    starts_with("stars")~""
+## Results - Table
+```{r results='asis'}
+for (i in models$model){
+  model_title <- case_when(
+    i == "model0" ~ "Model 0: Biomarker ~ Demographics",
+    i == "model1" ~ "Model 1: Biomarker ~ Demographics + Genetics",
+    i == "model2" ~ "Model 2: Biomarker ~ Demographics + Genetics + Family History",
+    i == "model3" ~ "Model 3: Biomarker ~ Demographics + Genetics + Family History + LIBRA2",
+    i == "model4" ~ "Model 4: Biomarker ~ Genetics + Family History + CogDRISK",
+    TRUE ~ paste("Model:", i)
   )
-res_table
-
-gtsave(res_table, 
-       vwidth = 2000,
-       filename = "PREVENTAD_model5.png", 
-       path = AIM1_OUTPUT_PATH$tables)
+  
+  res_table <- res_all_preventad %>% 
+    filter(model == i) %>%
+    select(outcome, model, term, estimate, std.error, statistic, p.value, stars) %>% 
+    pivot_wider(
+      names_from = outcome,
+      names_sep = "_",
+      values_from = c(estimate, std.error, statistic, p.value, stars)
+    ) %>%
+    select(-model) %>%
+    gt() %>% 
+    tab_spanner(
+      label = md("**AB42/40**"),
+      columns = ends_with("ab_ratio")
+    ) %>%
+    tab_spanner(
+      label = md("**GFAP**"),
+      columns = ends_with("gfap_log")
+    ) %>%
+    tab_spanner(
+      label = md("**NfL**"),
+      columns = ends_with("nfl_log")
+    ) %>%
+    tab_spanner(
+      label = md("**ptau181**"),
+      columns = ends_with("ptau181_log")
+    ) %>%
+    tab_spanner(
+      label = md("**ptau217**"),
+      columns = ends_with("ptau217_log")
+    ) %>%
+    tab_spanner(
+      label = md("**ptau231**"),
+      columns = ends_with("ptau231_sqrt")
+    ) %>%
+    cols_label(
+      starts_with("estimate")~ md("*Beta*"),
+      starts_with("std.error")~ md("*SE*"),
+      starts_with("statistic")~md("*Statistic*"),
+      starts_with("p.value")~ md("*p.value*"),
+      starts_with("stars")~ ""
+    ) %>%
+    tab_header(title = md(paste0("**", model_title, "**"))) %>%
+    opt_align_table_header(align = c("left"))
+  
+  print(res_table)
+}
 ```
 
 
-# Forest Plot
-```{r}
-color_palette <- c(
-  "Demographics" = "#999999",
-  "Genetics" = "#E41A1C",
-  "Family History" = "#377EB8",
-  "LIBRA2" = "#4DAF4A",
-  "CogDrisk" = "#984EA3"
-)
+## Results - Plot
+```{r regression-plot}
+#| fig-width: 14
+#| fig-height: 10
+#| out-width: "100%"
 
-
-plot1 <- ggplot(
-  res_all_preventad %>%
-    filter(model == "model5") %>%  
-    # Factor sig for ordering
-    mutate(sig = factor(sig, levels = c(TRUE, FALSE))) %>%
+for (i in models$model){
+  model_title <- case_when(
+    i == "model0" ~ "Model 0: Biomarker ~ Demographics",
+    i == "model1" ~ "Model 1: Biomarker ~ Demographics + Genetics",
+    i == "model2" ~ "Model 2: Biomarker ~ Demographics + Genetics + Family History",
+    i == "model3" ~ "Model 3: Biomarker ~ Demographics + Genetics + Family History + LIBRA2",
+    i == "model4" ~ "Model 4: Biomarker ~ Demographics + Genetics + Family History + CogDRISK",
+    TRUE ~ paste("Model:", i)
+  )
   
+  # Determine color variable for this model
+  use_term_colors <- i %in% c("model0", "model1")
+  
+  # Prepare data with conditional color variable
+  plot_data <- res_all_preventad %>%
+    filter(model == i) %>%  
+    mutate(sig = factor(sig, levels = c(TRUE, FALSE))) %>%
     mutate(term = factor(term,
-                         levels=c("score_cogd", "score_libra2",
-                                  "family_history2+ FDR + ext", "family_history2+ FDR", "family_history1 FDR + ext",
-                                  "GRS", "apoee4+", "apoee2+",
-                                  "BMI", "sexMale", "age"))) %>%
+                         levels = c("score_cogd", "score_libra2",
+                                   "family_history2+ FDR + ext", "family_history2+ FDR", "family_history1 FDR + ext",
+                                   "GRS", "apoee4+", "apoee2+",
+                                   "BMI", "sexMale", "age"))) %>%
     mutate(term = fct_recode(term,
                              "Age" = "age",
                              "Sex (Male vs Female)" = "sexMale",
                              "APOE e4+" = "apoee4+",
                              "APOE e2+" = "apoee2+",
                              "1 FDR + ext" = "family_history1 FDR + ext",
-                             "2+ FDR" = "family_history2+ FDR" ,
+                             "2+ FDR" = "family_history2+ FDR",
                              "2+ FDR + ext" = "family_history2+ FDR + ext",
                              "CogDrisk" = "score_cogd",
                              "LIBRA2" = "score_libra2")) %>%
-    # Order categories
-    mutate(category = factor(category, levels = names(color_palette))),
-  aes(y = term, x = estimate, group = term,
-      xmin = conf.low, xmax = conf.high, color = category)
-) +
-  #geom_point(aes(size = sig), position = position_dodge(width = 0.5)) +
-  geom_errorbarh(aes(linewidth = sig), 
-                 position = position_dodge(width = 0.5), height = 0.2) +
+    # Create conditional color variable
+    mutate(plot_color = if (use_term_colors) as.character(term) else category)
+  
+  res_plot <- ggplot(plot_data,
+    aes(y = term, x = estimate, group = term, xmin = conf.low, xmax = conf.high, 
+        color = plot_color, alpha = sig)  # Added alpha aesthetic
+  ) +
+  geom_point(size = 3, position = position_dodge(width = 0.5)) +  # Fixed size
+  geom_errorbarh(linewidth = 0.8, position = position_dodge(width = 0.5), height = 0.2) +  # Fixed linewidth
   geom_vline(xintercept = 0, linetype = 2) +
-  scale_size_manual(
-    values = c(`FALSE` = 0.75, `TRUE` = 1.75),
+  scale_alpha_manual(
+    values = c(`FALSE` = 0.3, `TRUE` = 1),  # Not sig = transparent, sig = opaque
     labels = c(`FALSE` = "Not Significant", `TRUE` = "Significant"),
     name = "Significance"
   ) +
-  # scale_color_jama() +
-  scale_color_jama(name = "Predictor Category") +
+  scale_color_jama(name = if (use_term_colors) "Predictor" else "Predictor Category") +
   facet_wrap(~outcome, scales = "free_x", ncol = 2) +
   labs(
     x = "Beta (95% CI)",
     y = "Predictor",
-    title = "Model: Biomarker ~ Demographics + Genetics + Family History + CRS"
+    title = model_title
   ) +
   theme_bw() +
   theme(
@@ -283,18 +270,30 @@ plot1 <- ggplot(
     legend.title = element_text(size = 10, face = "bold"),
     legend.text = element_text(size = 9)
   )
-plot1
-ggsave(file.path(AIM1_OUTPUT_PATH$figures, "PREVENTAD_model5.png"), 
-       width = 14, height = 10, dpi = 300)
+  
+  print(res_plot)
+}
 ```
 
 
-# Residuals plot
-```{r}
-for(mdl in c("model0", "model5")) {
+# Diagnostics plot
+```{r diagnostics-plot}
+#| fig-width: 14
+#| fig-height: 14
+#| out-width: "100%"
+
+for (i in models$model){
+  model_title <- case_when(
+    i == "model0" ~ "Model 0: Biomarker ~ Demographics",
+    i == "model1" ~ "Model 1: Biomarker ~ Demographics + Genetics",
+    i == "model2" ~ "Model 2: Biomarker ~ Demographics + Genetics + Family History",
+    i == "model3" ~ "Model 3: Biomarker ~ Demographics + Genetics + Family History + LIBRA2",
+    i == "model4" ~ "Model 4: Biomarker ~ Demographics + Genetics + Family History + CogDRISK",
+    TRUE ~ paste("Model:", i)
+  )
   
   model_data <- all_preventad %>%
-    filter(model == mdl) %>%
+    filter(model == i) %>%
     mutate(
       residuals = map(res, residuals),
       fitted = map(res, fitted)
@@ -302,63 +301,55 @@ for(mdl in c("model0", "model5")) {
     select(outcome, residuals, fitted) %>%
     unnest(c(residuals, fitted))
     
-    # Histogram
-    p_hist <- ggplot(model_data, aes(x = residuals)) +
-      geom_histogram(bins = 20, fill = "steelblue", alpha = 0.7, color = "white") +
-      geom_vline(xintercept = 0, linetype = "dashed", color = "red") +
-      facet_wrap(~outcome, scales = "free_x", ncol = 3) +
-      labs(title = "Histogram of Residuals",
-           x = "Residuals", y = "Count") +
-      theme_minimal() +
-      theme(
-        strip.text = element_text(face = "bold", size = 10),
-        strip.background = element_rect(fill = "grey90", color = NA),
-        plot.title = element_text(size = 12, face = "bold", hjust = 0.5)
-      )
-    
-    # Q-Q plot
-    p_qq <- ggplot(model_data, aes(sample = residuals)) +
-      stat_qq(size = 0.8, alpha = 0.6) +
-      stat_qq_line(color = "red", linewidth = 1) +
-      facet_wrap(~outcome, scales = "free", ncol = 3) +
-      labs(title = "Q-Q Plot",
-           x = "Theoretical Quantiles", y = "Sample Quantiles") +
-      theme_minimal() +
-      theme(
-        strip.text = element_text(face = "bold", size = 10),
-        strip.background = element_rect(fill = "grey90", color = NA),
-        plot.title = element_text(size = 12, face = "bold", hjust = 0.5)
-      )
-    
-    # Residuals vs Fitted
-    p_fitted <- ggplot(model_data, aes(x = fitted, y = residuals)) +
-      geom_point(alpha = 0.5, size = 1) +
-      geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
-      geom_smooth(se = FALSE, color = "blue", linewidth = 0.8, method = "loess") +
-      facet_wrap(~outcome, scales = "free", ncol = 3) +
-      labs(title = "Residuals vs Fitted Values",
-           x = "Fitted Values", y = "Residuals") +
-      theme_minimal() +
-      theme(
-        strip.text = element_text(face = "bold", size = 10),
-        strip.background = element_rect(fill = "grey90", color = NA),
-        plot.title = element_text(size = 12, face = "bold", hjust = 0.5)
-      )
-    
-    # Stack vertically
-    model_title <- case_when(
-      mdl == "model0" ~ "Model: Biomarker ~ Demographics",
-      mdl == "model5" ~ "Model: Biomarker ~ Demographics + Genetics + Family History + CRS"
+  # Histogram
+  p_hist <- ggplot(model_data, aes(x = residuals)) +
+    geom_histogram(bins = 20, fill = "steelblue", alpha = 0.7, color = "white") +
+    geom_vline(xintercept = 0, linetype = "dashed", color = "red") +
+    facet_wrap(~outcome, scales = "free_x", ncol = 3) +
+    labs(title = "Histogram of Residuals",
+         x = "Residuals", y = "Count") +
+    theme_minimal() +
+    theme(
+      strip.text = element_text(face = "bold", size = 10),
+      strip.background = element_rect(fill = "grey90", color = NA),
+      plot.title = element_text(size = 12, face = "bold", hjust = 0.5)
     )
     
-    combined <- p_hist / p_qq / p_fitted +
-      plot_annotation(
-        title = model_title,
-        theme = theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
-      )
+  # Q-Q plot
+  p_qq <- ggplot(model_data, aes(sample = residuals)) +
+    stat_qq(size = 0.8, alpha = 0.6) +
+    stat_qq_line(color = "red", linewidth = 1) +
+    facet_wrap(~outcome, scales = "free", ncol = 3) +
+    labs(title = "Q-Q Plot",
+         x = "Theoretical Quantiles", y = "Sample Quantiles") +
+    theme_minimal() +
+    theme(
+      strip.text = element_text(face = "bold", size = 10),
+      strip.background = element_rect(fill = "grey90", color = NA),
+      plot.title = element_text(size = 12, face = "bold", hjust = 0.5)
+    )
     
-    # Save
-    filename <- paste0("PREVENTAD_diagnostics_", mdl, ".png")
-    ggsave(file.path(AIM1_OUTPUT_PATH$figures, filename), combined, width = 14, height = 14, dpi = 300)
-  }
+  # Residuals vs Fitted
+  p_fitted <- ggplot(model_data, aes(x = fitted, y = residuals)) +
+    geom_point(alpha = 0.5, size = 1) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+    geom_smooth(se = FALSE, color = "blue", linewidth = 0.8, method = "loess") +
+    facet_wrap(~outcome, scales = "free", ncol = 3) +
+    labs(title = "Residuals vs Fitted Values",
+         x = "Fitted Values", y = "Residuals") +
+    theme_minimal() +
+    theme(
+      strip.text = element_text(face = "bold", size = 10),
+      strip.background = element_rect(fill = "grey90", color = NA),
+      plot.title = element_text(size = 12, face = "bold", hjust = 0.5)
+    )
+  
+  # Stack vertically
+  combined <- p_hist / p_qq / p_fitted +
+    plot_annotation(
+      title = model_title,
+      theme = theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
+    )
+  print(combined)
+}
 ```
