@@ -14,8 +14,8 @@ for (file in files) {
 }
 
 names(PREVENTAD_dat) <- c("AD8", "auditory", "bp_pulse_weight", "diagnosis", 
-                          "demographics", "medical_history", "genetics", "GWAS", 
-                          "lab", "meduse", "plasma_4plex", "plasma_ptau217", 
+                          "demographics", "CDR", "medical_history", "genetics", 
+                          "GWAS", "lab", "meduse", "plasma_4plex", "plasma_ptau217", 
                           "questionnaire")
 
 

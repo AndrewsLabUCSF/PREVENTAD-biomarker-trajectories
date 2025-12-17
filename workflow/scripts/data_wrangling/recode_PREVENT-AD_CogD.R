@@ -45,7 +45,7 @@ clinical_cogd <- clinical_raw %>%
     # Insomnia risk factor present == 1
     Insomnia = if_else(
       epworth_score >= 10 & pittsburgh_total_score > 5, 1, 0
-      ),
+      ) %>% factor(),
     
     # Depression risk factor present == 1
     Depression = case_when(
@@ -93,7 +93,7 @@ lifestyle_cogd <- lifestyle_raw %>%
                              smoking_present == 1 ~ 1,
                              smoking_present == 0 ~ 0,
                              TRUE ~ NA),
-         Cognitive_engagement = ntile(epoch_score_currently, 3),
+         Cognitive_engagement = ntile(epoch_score_currently, 3) %>% factor(),
          Social_engagement_holder = rowMeans(select(., social_life_frequency_activities:social_life_frequency_phone_calls)),
          # social_engagement: 0 == not lonely, 1 == lonely
          Social_engagement = as.factor(if_else(Social_engagement_holder > mean(Social_engagement_holder, na.rm=TRUE), 

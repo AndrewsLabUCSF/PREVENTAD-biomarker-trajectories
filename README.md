@@ -1,8 +1,4 @@
-# Template Repository 
-
-This is the directory structure used in Andrews Lab. Use this template for new project repositories. Customize as needed. 
-
-Highly recommended to have the parent directories (data, docs, resources, workflow/scripts, results) 
+# Using AD Genetic and Clinical Risk Burden Reports as Predictors of Blood-based Biomarker Levels and Trajectories
 
 
 # Data

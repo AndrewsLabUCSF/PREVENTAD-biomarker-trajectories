@@ -351,5 +351,9 @@ for (i in models$model){
       theme = theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
     )
   print(combined)
+  
+  # Save each plot
+  filename <- paste0("PREVENTAD_diagnostics_", i, ".png")
+  ggsave(file.path(AIM1_OUTPUT_PATH$figures, filename), combined, width = 14, height = 14, dpi = 300)
 }
 ```
