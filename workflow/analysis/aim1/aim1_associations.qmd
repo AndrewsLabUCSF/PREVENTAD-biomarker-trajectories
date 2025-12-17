@@ -21,6 +21,7 @@ biomarkers <- readRDS(file.path(DATA_CLEANED_PATH$filtered,
                                 "PREVENTAD_biomarkers_filtered.rds"))
 clinical <- readRDS(file.path(DATA_CLEANED_PATH$filtered, "PREVENTAD_clinical_imp_filtered_raw.rds"))
 cogd_dat <- readRDS(file.path(DATA_CLEANED_PATH$cleaned, "PREVENTAD_cogd_scored_dat.rds"))
+diagnosis <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_diagnosis.rds"))
 fhx <- readRDS(file.path(DATA_CLEANED_PATH$filtered, 
                          "PREVENTAD_fhx_filtered.rds"))
 grs <- readRDS(file.path(DATA_CLEANED_PATH$cleaned, "PREVENTAD_GRS.rds"))
@@ -106,7 +107,7 @@ df1 <- predictors_dat %>%
 df1
 ```
 
-# CRS
+# GRS
 ```{r}
 dat1 <- predictors_dat %>%
   left_join(diagnosis, by="CONP_ID") %>%
