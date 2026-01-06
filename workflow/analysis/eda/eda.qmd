@@ -1,5 +1,5 @@
 ---
-title: "eda"
+title: "Exploratory Data Analysis"
 format: html
 ---
 
@@ -8,10 +8,11 @@ knitr::opts_chunk$set(echo = FALSE, message = FALSE, warnings = FALSE)
 knitr::opts_knit$set(root.dir = here::here())
 ```
 
-# Load packages and data
 ```{r setting}
+# Load packages and data
 library(broom)
 library(car)
+library(patchwork)
 
 source('workflow/scripts/config.R')
 
@@ -21,47 +22,53 @@ biomarkers <- readRDS(file.path(DATA_CLEANED_PATH$filtered,
 predictors_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_predictors.rds"))
 ```
 
-# Get last measured biomarkers
-```{r}
-ptau217_last <- biomarkers %>%
-  group_by(CONP_ID) %>%
-  filter(!is.na(ptau217)) %>%
-  select(CONP_ID, Date_taken, age, ptau217) %>%
-  slice_tail() 
+# Predictor distributions
+```{r distributions}
+# Categorical
+apoe_hist <- all_dat %>%
+  ggplot(aes(x = apoe)) +
+  geom_bar(stat="count") + 
+  labs(title = "APOE Categories in PREVENT-AD", 
+       x = "APOE Category",
+       y = "Count")
 
-other_biomarkers_last <- biomarkers %>%
-  group_by(CONP_ID) %>%
-  select(CONP_ID, all_of(BIOMARKERS)) %>%
-  select(-ptau217) %>%
-  filter_at(vars(-CONP_ID), all_vars(!is.na(.))) %>%
-  slice_tail() 
+fhx_hist <- all_dat %>%
+  ggplot(aes(x = family_history)) +
+  geom_bar(stat="count") + 
+  labs(title = "PREVENT-AD Family History", 
+       x = "Family History",
+       y = "Count")
 
-all_dat <- predictors_dat %>% 
-  left_join((ptau217_last %>%
-               select(CONP_ID, ptau217)), by="CONP_ID") %>%
-  left_join(other_biomarkers_last, by="CONP_ID") %>%
-  mutate(gfap_log = log(gfap),
-         nfl_log = log(nfl),
-         ptau181_log = log(ptau181),
-         ptau217_log = log(ptau217),
-         ptau231_sqrt = sqrt(ptau231))
-  column_to_rownames(var="CONP_ID")
+cat_hist <- apoe_hist | fhx_hist
+cat_hist
 
-all_dat_longer <- all_dat %>%
-  pivot_longer(
-    cols = BIOMARKERS,
-    names_to = "biomarker",
-    values_to = "measure"
-  ) %>%
-  # mutate(measure_norm = if_else(biomarker == "ab_ratio", measure, log(measure)))
-  mutate(measure_norm = case_when(
-    biomarker == "ab_ratio" ~ measure,
-    #biomarker == "gfap" ~ sqrt(measure),
-    #
-    biomarker == "ptau231" ~ sqrt(measure),
-    #biomarker == "ptau217" ~ sign(measure) * abs(measure)^(1/3),
-    #biomarker != "ab_ratio" | biomarker != "ptau231" ~ ,
-    TRUE ~ log(measure)))
+# Continuous
+cogd_plot <- all_dat %>%
+  ggplot(aes(x = score_cogd)) +
+  geom_histogram(aes(y = ..density..), binwidth=2) +
+  geom_density(col="red") +
+  labs(title = "CogDrisk Scores in PREVENT-AD",
+       x = "CogDrisk Score",
+       y = "Density")
+
+libra2_plot <- all_dat %>%
+  ggplot(aes(x = score_libra2)) +
+  geom_histogram(aes(y = ..density..), binwidth=2) +
+  geom_density(col="red") +
+  labs(title = "LIBRA2 Scores in PREVENT-AD",
+       x = "LIBRA2 Score",
+       y = "Density")
+
+grs_plot <- all_dat %>%
+  ggplot(aes(x = GRS)) +
+  geom_histogram(aes(y = ..density..), bins=20) +
+  geom_density(col="red") +
+  labs(title = "GRS in PREVENT-AD",
+       x = "GRS",
+       y = "Density")
+
+cont_plot <- cogd_plot | libra2_plot | grs_plot
+cont_plot
 ```
 
 # Checking for colinearity

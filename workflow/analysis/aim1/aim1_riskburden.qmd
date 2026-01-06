@@ -1,5 +1,5 @@
 ---
-title: "aim1_riskburden"
+title: "Aim 1: Risk Burden"
 format: html
 ---
 
@@ -8,7 +8,6 @@ knitr::opts_chunk$set(echo = FALSE, message = FALSE, warnings = FALSE)
 knitr::opts_knit$set(root.dir = here::here())
 ```
 
-# Load packages and data
 ```{r setting}
 library(broom)
 library(car)
@@ -16,58 +15,20 @@ library(patchwork)
 
 source('workflow/scripts/config.R')
 
-biomarkers <- readRDS(file.path(DATA_CLEANED_PATH$filtered, 
-                                "PREVENTAD_biomarkers_filtered.rds"))
+all_dat <- readRDS(file.path(DATA_CLEANED_PATH$filtered, "PREVENTAD_lastvisit.rds"))
 diagnosis <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_diagnosis.rds"))
 
-predictors_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_predictors.rds"))
+predictors_dat <- readRDS(file.path(DATA_CLEANED_PATH$filtered, "PREVENTAD_predictors.rds"))
 ```
 
-# Get last measured biomarkers
-```{r biomarkers}
-ptau217_last <- biomarkers %>%
-  group_by(CONP_ID) %>%
-  filter(!is.na(ptau217)) %>%
-  select(CONP_ID, Date_taken, age, ptau217) %>%
-  slice_tail() 
+# Summary of findings:
 
-other_biomarkers_last <- biomarkers %>%
-  group_by(CONP_ID) %>%
-  select(CONP_ID, all_of(BIOMARKERS)) %>%
-  select(-ptau217) %>%
-  filter_at(vars(-CONP_ID), all_vars(!is.na(.))) %>%
-  slice_tail() 
-
-all_dat <- predictors_dat %>% 
-  left_join((ptau217_last %>%
-               select(CONP_ID, ptau217)), by="CONP_ID") %>%
-  left_join(other_biomarkers_last, by="CONP_ID") %>%
-  mutate(gfap_log = log(gfap),
-         nfl_log = log(nfl),
-         ptau181_log = log(ptau181),
-         ptau217_log = log(ptau217),
-         ptau231_sqrt = sqrt(ptau231)) %>%
-  column_to_rownames(var="CONP_ID")
-```
-
-# CRS distribution
-```{r crs-distribution-plot}
-cogd_hist <- predictors_dat %>%
-  ggplot(aes(x=score_cogd)) +
-  geom_histogram(aes(y=..density..), binwidth=2) +
-  geom_density(color="red") 
-
-libra2_hist <- predictors_dat %>%
-  ggplot(aes(x=score_libra2)) +
-  geom_histogram(aes(y=..density..), binwidth=2) +
-  geom_density(color="red") 
-
-plot1 <- cogd_hist | libra2_hist
-plot1
-```
 
 # CRS vs diagnosis
 ```{r crs-vs-diagnosis-plot}
+#| fig-width: 12
+#| fig-height: 18
+#| out-width: "100%"
 plot2_dat <- predictors_dat %>%
   left_join((diagnosis %>% select(CONP_ID, Clinical_diagnosis)), 
             by="CONP_ID")
@@ -106,8 +67,8 @@ plot2 <- cogd_diag / libra2_diag
 plot2
 ```
 
-# Risk burden model - Tertiles
-```{r risk-burden-model}
+# Risk burden model 
+```{r risk-burden-model-data}
 risk_dat <- all_dat %>%
   mutate(
     cogdrisk_tertile = ntile(score_cogd, 3),
@@ -118,40 +79,207 @@ risk_dat <- all_dat %>%
     
     # Strategy 1: Median split (50th percentile)
     cogdrisk_binary_median = ifelse(score_cogd >= median(score_cogd, na.rm = TRUE), 
-                                    "High", "Low"),
+                                    1, 0),
     libra2_binary_median = ifelse(score_libra2 >= median(score_libra2, na.rm = TRUE), 
-                                  "High", "Low"),
+                                  1, 0),
     grs_binary_median = ifelse(GRS >= median(GRS, na.rm = TRUE), 
-                               "High", "Low"),
+                               1, 0),
+    risk_score_1 = rowSums(across(c(fhx_burden, apoe_burden, cogdrisk_binary_median,
+                                    libra2_binary_median, grs_binary_median))),
     
     # Strategy 2: Top tertile (67th percentile)
     cogdrisk_binary_tertile = ifelse(score_cogd >= quantile(score_cogd, 2/3, na.rm = TRUE), 
-                                     "High", "Low"),
+                                     1, 0),
     libra2_binary_tertile = ifelse(score_libra2 >= quantile(score_libra2, 2/3, na.rm = TRUE), 
-                                   "High", "Low"),
+                                   1, 0),
     grs_binary_tertile = ifelse(GRS >= quantile(GRS, 2/3, na.rm = TRUE), 
-                                "High", "Low"),
+                                1, 0),
+    risk_score_2 = rowSums(across(c(fhx_burden, apoe_burden, cogdrisk_binary_tertile,
+                                    libra2_binary_tertile, grs_binary_tertile))),
     
     # Strategy 3: Top quartile (75th percentile)
     cogdrisk_binary_quartile = ifelse(score_cogd >= quantile(score_cogd, 0.75, na.rm = TRUE), 
-                                      "High", "Low"),
+                                      1, 0),
     libra2_binary_quartile = ifelse(score_libra2 >= quantile(score_libra2, 0.75, na.rm = TRUE), 
-                                      "High", "Low"),
+                                      1, 0),
     grs_binary_quartile = ifelse(GRS >= quantile(GRS, 0.75, na.rm = TRUE), 
-                                      "High", "Low"),
+                                      1, 0),
+    risk_score_3 = rowSums(across(c(fhx_burden, apoe_burden, cogdrisk_binary_quartile,
+                                    libra2_binary_quartile, grs_binary_quartile))),
     
     # Strategy 4: 1 SD above mean
     cogdrisk_binary_1sd = ifelse(score_cogd > mean(score_cogd, na.rm = TRUE) + 
                                     sd(score_cogd, na.rm = TRUE), 
-                                 "High", "Low"),
+                                 1, 0),
     libra2_binary_1sd = ifelse(score_libra2 > mean(score_libra2, na.rm = TRUE) + 
                                     sd(score_libra2, na.rm = TRUE), 
-                                 "High", "Low"),
+                                 1, 0),
     grs_binary_1sd = ifelse(GRS > mean(GRS, na.rm = TRUE) + 
                                     sd(GRS, na.rm = TRUE), 
-                                 "High", "Low")
+                                 1, 0),
+    risk_score_4 = rowSums(across(c(fhx_burden, apoe_burden, cogdrisk_binary_1sd,
+                                    libra2_binary_1sd, grs_binary_1sd))),
+  ) 
+
+risk_dat_longer <- risk_dat %>%
+  pivot_longer(
+    cols = all_of(BIOMARKERS_TRANS),
+    names_to = "biomarker",
+    values_to = "measure"
+  ) 
+```
+
+## Check cutoff values
+```{r risk-burden-model-hist}
+#| fig-width: 12
+#| fig-height: 18
+#| out-width: "100%"
+plot_cutoffs <- function(data, score_var, score_name) {
+  cutoff_median <- median(data[[score_var]], na.rm = TRUE)
+  cutoff_tertile <- quantile(data[[score_var]], 2/3, na.rm = TRUE)
+  cutoff_quartile <- quantile(data[[score_var]], 0.75, na.rm = TRUE)
+  cutoff_1sd <- mean(data[[score_var]], na.rm = TRUE) + sd(data[[score_var]], na.rm = TRUE)
+  
+  ggplot(data, aes(x = .data[[score_var]])) +
+    geom_histogram(bins = 30, fill = "steelblue", alpha = 0.7) +
+    geom_vline(aes(xintercept = cutoff_median, color = "Median"), 
+               linewidth = 1, linetype = "dashed") +
+    geom_vline(aes(xintercept = cutoff_tertile, color = "Top Tertile"), 
+               linewidth = 1, linetype = "dashed") +
+    geom_vline(aes(xintercept = cutoff_quartile, color = "Top Quartile"), 
+               linewidth = 1, linetype = "dashed") +
+    geom_vline(aes(xintercept = cutoff_1sd, color = "Mean + 1SD"), 
+               linewidth = 1, linetype = "dashed") +
+    scale_color_manual(
+      name = "Cutoff Strategy",
+      values = c("Median" = "red", "Top Tertile" = "blue", 
+                 "Top Quartile" = "green", "Mean + 1SD" = "purple")
+    ) +
+    labs(title = paste(score_name, "Distribution with Cutoff Strategies"),
+         x = score_name, y = "Count") +
+    theme_minimal() +
+    theme(legend.position = "bottom")
+}
+
+# Create plots
+p1 <- plot_cutoffs(risk_dat, "score_cogd", "CogDRISK")
+p2 <- plot_cutoffs(risk_dat, "score_libra2", "LIBRA2")
+p3 <- plot_cutoffs(risk_dat, "GRS", "GRS")
+
+# Combine
+combined_plot <- p1 / p2 / p3
+combined_plot
+```
+
+```{r risk-burden-model-table}
+# Calculate sample sizes for each cutoff method
+cutoff_sample_sizes <- tibble(
+  Score = rep(c("CogDRISK", "LIBRA2", "GRS"), each = 4),
+  Cutoff_Method = rep(c("Median", "Top Tertile", "Top Quartile", "1 SD above mean"), 3),
+  Cutoff_Value = c(
+    # CogDrisk
+    median(risk_dat$score_cogd, na.rm = TRUE),
+    quantile(risk_dat$score_cogd, 2/3, na.rm = TRUE),
+    quantile(risk_dat$score_cogd, 0.75, na.rm = TRUE),
+    mean(risk_dat$score_cogd, na.rm = TRUE) + sd(risk_dat$score_cogd, na.rm = TRUE),
+    # LIBRA2
+    median(risk_dat$score_libra2, na.rm = TRUE),
+    quantile(risk_dat$score_libra2, 2/3, na.rm = TRUE),
+    quantile(risk_dat$score_libra2, 0.75, na.rm = TRUE),
+    mean(risk_dat$score_libra2, na.rm = TRUE) + sd(risk_dat$score_libra2, na.rm = TRUE),
+    # GRS
+    median(risk_dat$GRS, na.rm = TRUE),
+    quantile(risk_dat$GRS, 2/3, na.rm = TRUE),
+    quantile(risk_dat$GRS, 0.75, na.rm = TRUE),
+    mean(risk_dat$GRS, na.rm = TRUE) + sd(risk_dat$GRS, na.rm = TRUE)
+  ),
+  N_High = c(
+    # CogDrisk
+    sum(risk_dat$cogdrisk_binary_median == 1, na.rm = TRUE),
+    sum(risk_dat$cogdrisk_binary_tertile == 1, na.rm = TRUE),
+    sum(risk_dat$cogdrisk_binary_quartile == 1, na.rm = TRUE),
+    sum(risk_dat$cogdrisk_binary_1sd == 1, na.rm = TRUE),
+    # LIBRA2
+    sum(risk_dat$libra2_binary_median == 1, na.rm = TRUE),
+    sum(risk_dat$libra2_binary_tertile == 1, na.rm = TRUE),
+    sum(risk_dat$libra2_binary_quartile == 1, na.rm = TRUE),
+    sum(risk_dat$libra2_binary_1sd == 1, na.rm = TRUE),
+    # GRS
+    sum(risk_dat$grs_binary_median == 1, na.rm = TRUE),
+    sum(risk_dat$grs_binary_tertile == 1, na.rm = TRUE),
+    sum(risk_dat$grs_binary_quartile == 1, na.rm = TRUE),
+    sum(risk_dat$grs_binary_1sd == 1, na.rm = TRUE)
+  )
+) %>%
+  mutate(
+    Cutoff_Value = round(Cutoff_Value, 2),
+    N_Total = nrow(risk_dat),
+    Percent_High = round((N_High / N_Total) * 100, 1)
   )
 
+# Create gt table
+cutoff_sample_sizes %>%
+  gt() %>%
+  tab_header(
+    title = md("**High-Risk Classification by Cutoff Method**")
+  ) %>%
+  cols_label(
+    Score = "Risk Score",
+    Cutoff_Method = "Cutoff Method",
+    Cutoff_Value = "Cutoff Value",
+    N_High = "N High Risk",
+    N_Total = "Total N",
+    Percent_High = "% High Risk"
+  ) %>%
+  tab_spanner(
+    label = md("**Sample Size**"),
+    columns = c(N_High, N_Total, Percent_High)
+  )
+```
+
+
+## Check for burden associations with biomarker levels
+```{r risk-burden-assoc, warning=FALSE}
+risk_scores_longer <- risk_dat_longer %>%
+  select(CONP_ID, risk_score_1, risk_score_2, risk_score_3, risk_score_4,
+         biomarker, measure) %>%  
+  pivot_longer(cols = c(risk_score_1, risk_score_2, risk_score_3, risk_score_4),
+               names_to = "risk_score_type",
+               values_to = "risk_score_value") %>%
+  mutate(
+    risk_score_label = case_when(
+      risk_score_type == "risk_score_1" ~ "Median Split (50th %ile)",
+      risk_score_type == "risk_score_2" ~ "Top Tertile (67th %ile)",
+      risk_score_type == "risk_score_3" ~ "Top Quartile (75th %ile)",
+      risk_score_type == "risk_score_4" ~ "1 SD Above Mean"
+    ),
+    risk_score_factor = factor(risk_score_value)
+  )
+
+combined_risk_plot <- ggplot(risk_scores_longer, 
+                              aes(x = risk_score_factor, y = measure, fill = risk_score_factor)) +
+  geom_violin(alpha = 0.7) +
+  geom_boxplot(width = 0.1, fill = "white") +
+  facet_grid(biomarker ~ risk_score_label, scales = "free") +
+  stat_compare_means(method = "anova",  
+                     label.y.npc = 0.8,
+                     geom = "label",
+                     size = 2) +
+  labs(x = "Composite Risk Score (0-5)",
+       y = "Biomarker Level",
+       title = "Biomarker Levels by Composite Risk Score Across Strategies") +
+  theme_bw() +
+  theme(legend.position = "none",
+        axis.text.x = element_text(size = 8),
+        strip.text = element_text(size = 8))
+
+combined_risk_plot
+
+# ggsave(file.path(AIM1_OUTPUT_PATH$figures, "PREVENTAD_risk_plot.png"), combined_risk_plot, width = 14, height = 14, dpi = 300)
+```
+
+
+```{r risk-burden-model}
 outcomes <- c("ab_ratio", "gfap_log", "nfl_log", "ptau181_log", "ptau217_log", "ptau231_sqrt")
 
 models <- tribble(~model, ~predictors,
@@ -245,7 +373,16 @@ res_risk_preventad <- bind_rows(select(risk_preventad, model, outcome, dataf)) %
 #| fig-height: 10
 #| out-width: "100%"
 
-for (i in models$model){
+model_order <- c(
+  # CogDRISK models - all strategies together
+  "CogDrisk_0", "CogDrisk_1", "CogDrisk_2", "CogDrisk_3", "CogDrisk_4",
+  # LIBRA2 models - all strategies together
+  "LIBRA2_0", "LIBRA2_1", "LIBRA2_2", "LIBRA2_3", "LIBRA2_4",
+  # Full models - all strategies together
+  "Full_0", "Full_1", "Full_2", "Full_3", "Full_4"
+)
+
+for (i in model_order){
   model_title <- case_when(
     i == "CogDrisk_0" ~ "CogDrisk Risk Burden Model",
     i == "LIBRA2_0" ~ "LIBRA2 Risk Burden Model",
@@ -269,20 +406,16 @@ for (i in models$model){
     TRUE ~ paste("Model:", i)
   )
   
-  # Determine color variable for this model
-  # use_term_colors <- i %in% c("model0", "model1")
-  
-  # Prepare data with conditional color variable
   plot_data <- res_risk_preventad %>%
     filter(model == i) %>%  
     mutate(sig = factor(sig, levels = c(TRUE, FALSE)))
   
   res_plot <- ggplot(plot_data,
     aes(y = term, x = estimate, group = term, xmin = conf.low, xmax = conf.high, 
-        color = term, alpha = sig)  # Added alpha aesthetic
+        color = term, alpha = sig)  
   ) +
-  geom_point(size = 3, position = position_dodge(width = 0.5)) +  # Fixed size
-  geom_errorbarh(linewidth = 0.8, position = position_dodge(width = 0.5), height = 0.2) +  # Fixed linewidth
+  geom_point(size = 3, position = position_dodge(width = 0.5)) + 
+  geom_errorbarh(linewidth = 0.8, position = position_dodge(width = 0.5), height = 0.2) + 
   geom_vline(xintercept = 0, linetype = 2) +
   scale_alpha_manual(
     values = c(`FALSE` = 0.3, `TRUE` = 1),  # Not sig = transparent, sig = opaque
@@ -315,7 +448,7 @@ for (i in models$model){
 ```
 
 # Diagnostics plot
-```{r}
+```{r diagnostics-plot}
 #| fig-width: 14
 #| fig-height: 14
 #| out-width: "100%"

@@ -19,7 +19,7 @@ source('workflow/scripts/config.R')
 biomarkers <- readRDS(file.path(DATA_CLEANED_PATH$filtered, 
                                 "PREVENTAD_biomarkers_filtered.rds"))
 
-predictors_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_predictors.rds"))
+predictors_dat <- readRDS(file.path(DATA_CLEANED_PATH$filtered, "PREVENTAD_predictors.rds"))
 ```
 
 ```{r biomarker-data}

@@ -5,10 +5,13 @@
 source('workflow/scripts/config.R')
 
 # Load datasets
-files <- list.files('data/raw/PREVENT-AD', full.names=TRUE)
+all_files <- list.files(RAW_DATA_PATH, full.names=TRUE)
+
+file_names <- all_files[str_detect(all_files, 
+                                   "AD8|Auditory|BP_Pulse_Weight|CDR_FU|Clinical_diagnosis|Demographics|Medical_history|Genetics|GWAS|Lab_Registered|Med_use|Plasma|Behavioral")]
 
 PREVENTAD_dat <- c()
-for (file in files) {
+for (file in file_names) {
   data <- read.csv(file)
   PREVENTAD_dat[[file]] <- data
 }

@@ -10,31 +10,98 @@ knitr::opts_knit$set(root.dir = here::here())
 
 ```{r setting}
 library(ggpubr)
+library(patchwork)
 
 source('workflow/scripts/config.R')
-source(CRS_FN)
 
-dat_fhx <- readRDS(file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_fhx_dat.rds"))
-biomarkers <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_biomarkers.rds"))
+fhx_dat <- readRDS(file.path(DATA_CLEANED_PATH$filtered, 
+                                "PREVENTAD_fhx_filtered.rds"))
+biomarkers <- readRDS(file.path(DATA_CLEANED_PATH$filtered, 
+                                "PREVENTAD_biomarkers_filtered.rds"))
 PREVENTAD_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_dat.rds"))
 ```
 
-# Family history histograms
-```{r}
-hist1 <- ggplot(dat_fhx, aes(x=var2)) +
-  geom_histogram(binwidth=1, stat="count")
-hist1
+# Family history visualizations
+```{r fhx-viz}
+hist1 <- ggplot(fhx_dat, aes(x=FDR_AD)) +
+  geom_histogram(binwidth=1) +
+  labs(title = "First-degree Relatives with AD",
+       x = "Number of First-degree Relatives with AD",
+       y = "Count")
 
-hist2 <- ggplot(dat_fhx, aes(x=other_family_members_AD)) +
-  geom_histogram(binwidth=1)
-hist2
+hist2 <- ggplot(fhx_dat, aes(x=other_family_members_AD)) +
+  geom_histogram(binwidth=1) +
+  labs(title = "Extended Family with AD",
+       x = "Number of Extended Family Members with AD",
+       y = "Count")
+
+# Combine histograms
+fhx_hist <- hist1 + hist2 + plot_layout(axes="collect")
+fhx_hist
+
+# Crosstab heatmap
+fhx_xtab <- fhx_dat %>%
+  count(FDR_AD, other_family_members_AD) %>%
+  ggplot(aes(x = as.factor(other_family_members_AD), 
+             y = as.factor(FDR_AD), 
+             fill = n)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = n), size = 5, color = "black") +
+  scale_fill_gradient(low = "lightblue", high = "darkblue", name = "Count") +
+  labs(
+    title = "Family History Crosstabulation",
+    x = "Number of Extended Relatives with AD",
+    y = "Number of First-Degree Relatives with AD"
+  ) +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    axis.text = element_text(size = 10)
+  )
+fhx_xtab
+
+# Save plots
+ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_fhx_hist.png"), fhx_hist)
+ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_fhx_heatmap.png"), fhx_xtab)
+
+# Row percentages (% within each FDR category)
+fhx_crosstab <- fhx_dat %>%
+  count(FDR_AD, other_family_members_AD) %>%
+  arrange(FDR_AD, other_family_members_AD) %>%
+  pivot_wider(names_from = other_family_members_AD, 
+              values_from = n, 
+              values_fill = 0) %>%
+  mutate(Total = rowSums(across(where(is.numeric)))) %>%
+  gt() %>%
+  tab_header(
+    title = md("**Family History Crosstabulation**"),
+    subtitle = "First-Degree Relatives (FDR) vs Extended Relatives with AD"
+  ) %>%
+  cols_label(
+    FDR_AD = "Number of FDR with AD"
+  ) %>%
+  tab_spanner(
+    label = "Number of Extended Relatives with AD",
+    columns = -c(FDR_AD, Total)
+  ) %>%
+  tab_style(
+    style = cell_fill(color = "lightblue"),
+    locations = cells_body(columns = Total)
+  ) %>%
+  grand_summary_rows(
+    columns = where(is.numeric),
+    fns = list(Total = ~sum(.)),
+    fmt = ~ fmt_number(., decimals = 0)
+  )
+fhx_crosstab
+print(fhx_crosstab_pct)
 ```
 
 # Checking association of family history burden and biomarker levels
 ## Recoded family history variable vs biomarker levels
 ```{r}
 df1 <- dat_fhx %>%
-  filter(CONP_ID %in% baseline_biomarkers$CONP_ID) %>%
+  filter(CONP_ID %in% biomarkers$CONP_ID) %>%
   left_join((biomarkers %>%
                group_by(CONP_ID) %>%
                slice(1)),
@@ -42,7 +109,7 @@ df1 <- dat_fhx %>%
   
 df1_longer <- df1 %>%
   pivot_longer(
-    cols = biomarker_cols,
+    cols = BIOMARKERS,
     names_to = "biomarker",
     values_to = "measure"
   ) %>%
@@ -53,10 +120,10 @@ df1_longer <- df1 %>%
   mutate(ext_relatives_AD = factor(ext_relatives_AD,
                                    levels=c(0, 1),
                                    labels=c("No", "Yes"))) %>%
-  mutate(FDRAD_1ormore = factor(FDRAD_1ormore,
+  mutate(FDRAD_1ormore = factor(FDR_AD),
                        levels=c(1, 2),
                        labels=c("1 FDR",
-                                "2+ FDR"))) %>%
+                                "2+ FDR")) %>%
   mutate(FDR_ext_AD = factor(FDR_ext_AD,
                        levels=c(1, 2, 3, 4),
                        labels=c("1 FDR", "1 FDR + ext", "2+ FDR", "2+ FDR + ext")))
