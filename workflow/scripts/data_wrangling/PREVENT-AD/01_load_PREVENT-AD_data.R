@@ -5,7 +5,7 @@
 source('workflow/scripts/config.R')
 
 # Load datasets
-all_files <- list.files(RAW_DATA_PATH, full.names=TRUE)
+all_files <- list.files(RAW_PREVENTAD_DATA_PATH, full.names=TRUE)
 
 file_names <- all_files[str_detect(all_files, 
                                    "AD8|Auditory|BP_Pulse_Weight|CDR|Clinical_diagnosis|Demographics|Medical_history|Genetics|GWAS|Lab_Registered|MCI|Med_use|Plasma|Behavioral")]

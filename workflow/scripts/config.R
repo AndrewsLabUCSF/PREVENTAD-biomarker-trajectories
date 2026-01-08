@@ -23,7 +23,8 @@ BIOMARKERS_TRANS <- c("ab_ratio", "gfap_log", "nfl_log", "ptau181_log",
 
 
 # INPUT DATA PATH ---------------------------------------------------------
-RAW_DATA_PATH <- file.path("~/Library/CloudStorage/Box-Box/AndrewsLab/data/PREVENT-AD/data/")
+RAW_PREVENTAD_DATA_PATH <- file.path("~/Library/CloudStorage/Box-Box/AndrewsLab/data/PREVENT-AD/data/")
+RAW_BRANCH_DATA_PATH <- file.path("~/Library/CloudStorage/Box-Box/AndrewsLab/data/BrANCH/")
 
 
 # OUTPUT DATA PATHS -------------------------------------------------------
