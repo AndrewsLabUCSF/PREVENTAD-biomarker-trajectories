@@ -14,6 +14,7 @@ fhx <- readRDS(file.path(DATA_CLEANED_PATH$filtered,
                          "PREVENTAD_fhx_filtered.rds"))
 grs <- readRDS(file.path(DATA_CLEANED_PATH$cleaned, "PREVENTAD_GRS.rds"))
 libra_dat <- readRDS(file.path(DATA_CLEANED_PATH$cleaned, "PREVENTAD_libra_scored_dat.rds"))
+PREVENTAD_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_dat.rds"))
 
 
 # PREDICTORS DATAFRAME ------------------------------------------------------
@@ -31,12 +32,15 @@ predictors_dat <- grs %>%
   left_join((cogd_dat %>% 
                select(CONP_ID, score_cogd)),
             by="CONP_ID") %>%
+  left_join((PREVENTAD_dat$demographics %>% 
+               select(CONP_ID, educ = Education_years)),
+            by="CONP_ID")
   left_join(fhx, by="CONP_ID") %>%
   left_join((libra_dat %>% 
                select(CONP_ID, score_libra2)),
             by="CONP_ID") %>%
   select(CONP_ID, age, sex, BMI, apoe, 
-         score_cogd, GRS, score_libra2, family_history)
+         score_cogd, educ, GRS, score_libra2, family_history)
 
 # Save processed dataframe
 saveRDS(predictors_dat, file.path(DATA_CLEANED_PATH$filtered, "PREVENTAD_predictors.rds"))
@@ -71,7 +75,8 @@ biomarker_last_dat <- predictors_dat %>%
          nfl_log = log(nfl),
          ptau181_log = log(ptau181),
          ptau217_log = log(ptau217),
-         ptau231_sqrt = sqrt(ptau231)) 
+         ptau231_sqrt = sqrt(ptau231),
+         ptau217_ab42_ratio_log = log(ptau217_ab42_ratio)) 
 
 # Longitudinal biomarker dataframe
 all_dat <- biomarkers %>%
@@ -80,7 +85,8 @@ all_dat <- biomarkers %>%
          nfl_log = log(nfl),
          ptau181_log = log(ptau181),
          ptau217_log = log(ptau217),
-         ptau231_sqrt = sqrt(ptau231)) 
+         ptau231_sqrt = sqrt(ptau231),
+         ptau217_ab42_ratio_log = log(ptau217_ab42_ratio)) 
 
 # Save processed dataframes
 saveRDS(baseline_dat, file.path(DATA_CLEANED_PATH$filtered, "PREVENTAD_baseline.rds"))

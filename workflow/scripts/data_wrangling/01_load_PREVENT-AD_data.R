@@ -8,7 +8,7 @@ source('workflow/scripts/config.R')
 all_files <- list.files(RAW_DATA_PATH, full.names=TRUE)
 
 file_names <- all_files[str_detect(all_files, 
-                                   "AD8|Auditory|BP_Pulse_Weight|CDR_FU|Clinical_diagnosis|Demographics|Medical_history|Genetics|GWAS|Lab_Registered|Med_use|Plasma|Behavioral")]
+                                   "AD8|Auditory|BP_Pulse_Weight|CDR|Clinical_diagnosis|Demographics|Medical_history|Genetics|GWAS|Lab_Registered|MCI|Med_use|Plasma|Behavioral")]
 
 PREVENTAD_dat <- c()
 for (file in file_names) {
@@ -16,9 +16,9 @@ for (file in file_names) {
   PREVENTAD_dat[[file]] <- data
 }
 
-names(PREVENTAD_dat) <- c("AD8", "auditory", "bp_pulse_weight", "diagnosis", 
-                          "demographics", "CDR", "medical_history", "genetics", 
-                          "GWAS", "lab", "meduse", "plasma_4plex", "plasma_ptau217", 
+names(PREVENTAD_dat) <- c("AD8", "auditory", "bp_pulse_weight", "CDR_FU", "diagnosis", 
+                          "demographics", "CDR_BL", "medical_history", "genetics", 
+                          "GWAS", "lab", "MCI", "meduse", "plasma_4plex", "plasma_ptau217", 
                           "questionnaire")
 
 
@@ -81,13 +81,6 @@ PREVENTAD_dat$family_history <- PREVENTAD_dat$demographics %>%
 
 fhx_raw <- PREVENTAD_dat$family_history
 
-# Diagnosis
-diagnosis <- clinical_raw %>%
-  select(CONP_ID) %>%
-  left_join(PREVENTAD_dat$diagnosis, by="CONP_ID") %>%
-  mutate(Clinical_diagnosis = if_else(is.na(Clinical_diagnosis), "CN", Clinical_diagnosis)) %>%
-  select(-CONP_CandID)
-
 # Lifestyle table
 lifestyle_raw <- PREVENTAD_dat$demographics %>%
   select(CONP_ID) %>%
@@ -143,8 +136,8 @@ saveRDS(lifestyle_raw,
         file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_lifestyle_raw.rds"))
 saveRDS(fhx_raw,
          file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_fhx_raw.rds"))
-saveRDS(diagnosis,
-        file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_diagnosis.rds"))
+saveRDS(PREVENTAD_dat$MCI,
+        file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_MCI_raw.rds"))
 saveRDS(biomarkers,
         file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_biomarkers.rds"))
 saveRDS(PREVENTAD_dat, 

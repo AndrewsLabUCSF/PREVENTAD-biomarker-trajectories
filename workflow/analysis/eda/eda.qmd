@@ -19,20 +19,22 @@ source('workflow/scripts/config.R')
 biomarkers <- readRDS(file.path(DATA_CLEANED_PATH$filtered, 
                                 "PREVENTAD_biomarkers_filtered.rds"))
 
-predictors_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_predictors.rds"))
+baseline_dat <- readRDS(file.path(DATA_CLEANED_PATH$filtered, "PREVENTAD_baseline.rds"))
+lastvisit_dat <- readRDS(file.path(DATA_CLEANED_PATH$filtered, "PREVENTAD_lastvisit.rds"))
+all_dat <- readRDS(file.path(DATA_CLEANED_PATH$filtered, "PREVENTAD_longitudinal.rds"))
 ```
 
 # Predictor distributions
-```{r distributions}
+```{r predictor-dist}
 # Categorical
-apoe_hist <- all_dat %>%
+apoe_hist <- baseline_dat %>%
   ggplot(aes(x = apoe)) +
   geom_bar(stat="count") + 
   labs(title = "APOE Categories in PREVENT-AD", 
        x = "APOE Category",
        y = "Count")
 
-fhx_hist <- all_dat %>%
+fhx_hist <- baseline_dat %>%
   ggplot(aes(x = family_history)) +
   geom_bar(stat="count") + 
   labs(title = "PREVENT-AD Family History", 
@@ -43,7 +45,7 @@ cat_hist <- apoe_hist | fhx_hist
 cat_hist
 
 # Continuous
-cogd_plot <- all_dat %>%
+cogd_plot <- baseline_dat %>%
   ggplot(aes(x = score_cogd)) +
   geom_histogram(aes(y = ..density..), binwidth=2) +
   geom_density(col="red") +
@@ -51,7 +53,7 @@ cogd_plot <- all_dat %>%
        x = "CogDrisk Score",
        y = "Density")
 
-libra2_plot <- all_dat %>%
+libra2_plot <- baseline_dat %>%
   ggplot(aes(x = score_libra2)) +
   geom_histogram(aes(y = ..density..), binwidth=2) +
   geom_density(col="red") +
@@ -59,7 +61,7 @@ libra2_plot <- all_dat %>%
        x = "LIBRA2 Score",
        y = "Density")
 
-grs_plot <- all_dat %>%
+grs_plot <- baseline_dat %>%
   ggplot(aes(x = GRS)) +
   geom_histogram(aes(y = ..density..), bins=20) +
   geom_density(col="red") +
@@ -77,4 +79,83 @@ summary(all_dat$score_cogd)
 hist(log(all_dat$score_cogd))
 
 cor.test(all_dat$score_cogd, all_dat$score_libra2)
+```
+
+
+# Biomarker distributions 
+```{r biomarker-dist}
+biomarkers_longer <- all_dat %>%
+  select(CONP_ID, Visit_label, all_of(BIOMARKERS)) %>%
+  pivot_longer(
+    cols = all_of(BIOMARKERS),
+    names_to = "biomarker",
+    values_to = "measure"
+  )
+
+biomarker_plot <- biomarkers_longer %>%
+  ggplot(aes(x=measure)) +
+  geom_density() +
+  facet_wrap(~biomarker, scales="free")
+
+biomarker_plot
+
+biomarkers_transform <- all_dat %>%
+  select(CONP_ID, Visit_label, all_of(BIOMARKERS)) %>%
+  mutate(gfap_log = log(gfap),
+         nfl_log = log(nfl),
+         ptau181_log = log(ptau181),
+         ptau217_log = log(ptau217),
+         ptau231_sqrt = sqrt(ptau231),
+         ptau217_ab42_ratio_log = log(ptau217_ab42_ratio)
+         )
+
+biomarkers_transform_longer <- biomarkers_transform %>%
+  select(CONP_ID, Visit_label, all_of(BIOMARKERS_TRANS)) %>%
+  pivot_longer(
+    cols = all_of(BIOMARKERS_TRANS),
+    names_to = "biomarker",
+    values_to = "measure"
+  )
+
+biomarker_transformed_plot <- biomarkers_transform_longer %>%
+  ggplot(aes(x=measure)) +
+  geom_density() +
+  facet_wrap(~biomarker, scales="free")
+
+biomarker_transformed_plot
+```
+
+# Biomarker QQ plot
+```{r biomarker-qq}
+ggplot(biomarkers_longer, aes(sample = measure)) +
+    stat_qq(size = 0.8, alpha = 0.6) +
+    stat_qq_line(color = "red", linewidth = 1) +
+    facet_wrap(~biomarker, scales = "free", ncol = 3) +
+    labs(title = "Q-Q Plot",
+         x = "Theoretical Quantiles", y = "Sample Quantiles") +
+    theme_minimal() +
+    theme(
+      strip.text = element_text(face = "bold", size = 10),
+      strip.background = element_rect(fill = "grey90", color = NA),
+      plot.title = element_text(size = 12, face = "bold", hjust = 0.5)
+    )
+
+ggplot(biomarkers_transform_longer, aes(sample = measure)) +
+    stat_qq(size = 0.8, alpha = 0.6) +
+    stat_qq_line(color = "red", linewidth = 1) +
+    facet_wrap(~biomarker, scales = "free", ncol = 3) +
+    labs(title = "Q-Q Plot (Transformed)",
+         x = "Theoretical Quantiles", y = "Sample Quantiles") +
+    theme_minimal() +
+    theme(
+      strip.text = element_text(face = "bold", size = 10),
+      strip.background = element_rect(fill = "grey90", color = NA),
+      plot.title = element_text(size = 12, face = "bold", hjust = 0.5)
+    )
+```
+
+```{r}
+shapiro.test(biomarkers_transform$ptau217_ab42_ratio_log)
+shapiro.test(all_dat$ptau217_ab42_ratio)
+shapiro.test(biomarkers_transform$ptau231_sqrt)
 ```

@@ -16,6 +16,7 @@ fhx_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_fhx_raw.rds"))
 genetics_raw <- PREVENTAD_dat$genetics
 gwas_raw <- PREVENTAD_dat$GWAS
 lifestyle_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_lifestyle_raw.rds"))
+mci_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_MCI_raw.rds"))
 
 
 # APOE --------------------------------------------------------------------
@@ -62,11 +63,13 @@ biomarkers <- biomarkers_raw %>%
   ) %>%
   group_by(CONP_ID) %>%
   mutate(
+    ptau217_ab42_ratio = ptau217/AB42_simoa_4plex,
     age = age/12,
     baseline_date = first(Date_taken),
     years = interval(ym(baseline_date), ym(Date_taken)) / years(1),
     baseline_age = first(age)
-  )
+  ) %>%
+  select(-AB42_simoa_4plex)
 
 # Save biomarker dataset
 saveRDS(biomarkers, file.path(DATA_CLEANED_PATH$cleaned, "PREVENTAD_biomarkers.rds"))
@@ -153,6 +156,18 @@ dat_fhx <- fhx_raw %>%
 saveRDS(dat_fhx, file.path(DATA_CLEANED_PATH$cleaned, "PREVENTAD_fhx_dat.rds"))
 
 
+# MCI ---------------------------------------------------------------------
+mci <- mci_raw %>%
+  # recode MCI subtype to unimpaired, MCI, and dementia labels
+  mutate(mci_status = case_when(RC_MCI == 0 ~ 0,
+                                RC_MCI_subtype >= 2 & RC_MCI_subtype <= 5 ~ 1,
+                                RC_MCI_subtype == 6 ~ 2),
+         mci_status = factor(mci_status,
+                             levels=c(0, 1, 2),
+                             labels=c("CN", "MCI", "Dementia")))
+
+
+
 # MISSING DATA IMPUTATION -------------------------------------------------
 # Names of variables with any NA
 clinical_vars_to_imp <- names(clinical_raw)[sapply(clinical_raw, anyNA)]
@@ -207,6 +222,9 @@ fhx_filtered <- dat_fhx %>%
 lifestyle_imp_filtered_raw <- lifestyle_imp_raw %>%
   filter(CONP_ID %in% gwas_raw$CONP_ID)
 
+mci_filtered <- mci %>%
+  filter(CONP_ID %in% gwas_raw$CONP_ID)
+
 meduse_filtered <- meduse %>%
   filter(CONP_ID %in% gwas_raw$CONP_ID)
 
@@ -221,6 +239,9 @@ saveRDS(fhx_filtered, file.path(DATA_CLEANED_PATH$filtered,
                                 "PREVENTAD_fhx_filtered.rds"))
 saveRDS(lifestyle_imp_filtered_raw, file.path(DATA_CLEANED_PATH$filtered, 
                                              "PREVENTAD_lifestyle_imp_filtered_raw.rds"))
+saveRDS(mci_filtered, file.path(DATA_CLEANED_PATH$filtered, 
+                                "PREVENTAD_MCI_filtered.rds"))
 saveRDS(meduse_filtered, file.path(DATA_CLEANED_PATH$filtered, 
                                    "PREVENTAD_meduse_filtered.rds"))
+
 

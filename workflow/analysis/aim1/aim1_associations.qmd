@@ -17,39 +17,73 @@ library(patchwork)
 source('workflow/scripts/config.R')
 
 predictors_dat <- readRDS(file.path(DATA_CLEANED_PATH$filtered, "PREVENTAD_predictors.rds"))
-all_dat <- readRDS(file.path(DATA_CLEANED_PATH$filtered, "PREVENTAD_lastvisit.rds"))
+lastvisit_dat <- readRDS(file.path(DATA_CLEANED_PATH$filtered, "PREVENTAD_lastvisit.rds"))
+all_dat <- readRDS(file.path(DATA_CLEANED_PATH$filtered, "PREVENTAD_longitudinal.rds"))
+
+mci_dat <- readRDS(file.path(DATA_CLEANED_PATH$filtered, "PREVENTAD_MCI_filtered.rds"))
+
+lastvisit_longer <- lastvisit_dat %>%
+  pivot_longer(
+    cols = all_of(BIOMARKERS_TRANS),
+    names_to = "biomarker",
+    values_to = "measure"
+  )
 ```
 
-# Predictor distributions
-```{r distributions}
-\df1 <- predictors_dat %>%
-  left_join(diagnosis, by="CONP_ID") %>%
-  ggplot(aes(x=Clinical_diagnosis, y=GRS, fill=Clinical_diagnosis)) +
-  geom_violin(alpha=0.7) +
-  #facet_wrap(~ biomarker, scales="free") +
-  geom_boxplot(width=0.1, fill="white")
-df1
-```
-
-# GRS
-```{r grs}
-dat1 <- predictors_dat %>%
-  left_join(diagnosis, by="CONP_ID") %>%
-  mutate(Clinical_diagnosis = as.factor(Clinical_diagnosis))
-model1 <- lm(GRS ~ age + sex + apoe + Clinical_diagnosis, data=dat1)
-summ(model1)
-plot(model1)
-
-ggplot(dat1, aes(x=Clinical_diagnosis, y=GRS)) +
-  geom_point() +
-  geom_smooth(method="lm")
-```
 
 # Predictor associations with biomarker levels (last visit)
-```{r }
-# Continuous
-plot1 <- all_dat_longer %>%
-  ggplot(aes(x = score_libra2, y = measure_norm)) +
+```{r predictor-associations}
+# GRS
+grs_plot <- lastvisit_longer %>%
+  ggplot(aes(x = GRS, y = measure)) +
+  geom_point(alpha = 0.5, size = 1, na.rm=TRUE) +
+  geom_smooth(method = "lm", se = TRUE, linewidth = 0.5, na.rm=TRUE) +
+  stat_cor(label.x.npc=0.6,
+           label.y.npc=0.8,
+           size=2.75,
+           geom = "label",
+           #position="jitter",
+           color="red",
+           label.sep = "\n",
+           na.rm=TRUE) +
+  facet_wrap(~biomarker, scales="free") + 
+  labs(x = "GRS",
+       y = "Biomarker Level",
+       title = "GRS and AD Blood-based Biomarker Levels in PREVENT-AD",
+       subtitle = "Biomarker level taken at last visit") +
+  theme_minimal() +
+  theme(legend.position = "bottom") 
+grs_plot
+# Save plot
+# ggsave(file.path(AIM1_OUTPUT_PATH$figures, "PREVENTAD_GRS_vs_BBM.png"), grs_plot)
+
+# CogDrisk
+cogd_plot <- lastvisit_longer %>%
+  ggplot(aes(x = score_cogd, y = measure)) +
+  geom_point(alpha = 0.5, size = 1, na.rm=TRUE) +
+  geom_smooth(method = "lm", se = TRUE, linewidth = 0.5, na.rm=TRUE) +
+  stat_cor(label.x.npc=0.6,
+           label.y.npc=0.2,
+           size=2.75,
+           geom = "label",
+           #position="jitter",
+           color="red",
+           label.sep = "\n",
+           na.rm=TRUE) +
+  facet_wrap(~biomarker, scales="free") + 
+  labs(x = "CogDrisk",
+       y = "Biomarker Level",
+       title = "CogDrisk and AD Blood-based Biomarker Levels in PREVENT-AD",
+       subtitle = "Biomarker level taken at last visit") +
+  theme_minimal() +
+  theme(legend.position = "bottom") 
+cogd_plot
+# Save plot
+# ggsave(file.path(AIM1_OUTPUT_PATH$figures, "PREVENTAD_CogD_vs_BBM.png"), cogd_plot)
+
+# LIBRA2
+libra2_plot <- lastvisit_longer %>%
+  ggplot(aes(x = score_libra2, y = measure)) +
   geom_point(alpha = 0.5, size = 1, na.rm=TRUE) +
   geom_smooth(method = "lm", se = TRUE, linewidth = 0.5, na.rm=TRUE) +
   stat_cor(label.x.npc=0.6,
@@ -62,18 +96,17 @@ plot1 <- all_dat_longer %>%
            na.rm=TRUE) +
   facet_wrap(~biomarker, scales="free") + 
   labs(x = "LIBRA2",
-       y = "Biomarker Level (pg/mL or AB ratio)",
+       y = "Biomarker Level",
        title = "LIBRA2 and AD Blood-based Biomarker Levels in PREVENT-AD",
        subtitle = "Biomarker level taken at last visit") +
   theme_minimal() +
   theme(legend.position = "bottom") 
-plot1
-
+libra2_plot
 # Save plot
-# ggsave(file.path(AIM1_OUTPUT_PATH$figures, "PREVENTAD_LIBRA2_vs_BBM.png"), plot1)
+ggsave(file.path(AIM1_OUTPUT_PATH$figures, "PREVENTAD_LIBRA2_vs_BBM.png"), libra2_plot)
 
-# Discrete
-plot2 <- all_dat_longer %>%
+# APOE
+apoe_plot <- all_dat_longer %>%
   ggplot(aes(x=apoe, y=measure_norm, fill=apoe)) +
   geom_violin(alpha=0.7) +
   facet_wrap(~ biomarker, scales="free") +
@@ -89,8 +122,7 @@ plot2 <- all_dat_longer %>%
        subtitle = "Biomarker level taken at last visit") +
   theme(legend.position="none",
         axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
-plot2
-
+apoe_plot
 # Save plot
 # ggsave(file.path(AIM1_OUTPUT_PATH$figures, "PREVENTAD_apoe_vs_BBM.png"), plot2)
 ```
@@ -98,7 +130,7 @@ plot2
 
 # Demographic risk factor associations with biomarker levels (last visit)
 ```{r}
-dem_dat_longer <- all_dat_longer %>%
+dem_dat_longer <- all_longer %>%
   select(age, sex, BMI, biomarker, measure_norm)
 
 dem_age_plot <- dem_dat_longer %>%

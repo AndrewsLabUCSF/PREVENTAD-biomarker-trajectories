@@ -16,36 +16,9 @@ library(patchwork)
 
 source('workflow/scripts/config.R')
 
-biomarkers <- readRDS(file.path(DATA_CLEANED_PATH$filtered, 
-                                "PREVENTAD_biomarkers_filtered.rds"))
-
+lastvisit_dat <- readRDS(file.path(DATA_CLEANED_PATH$filtered, "PREVENTAD_lastvisit.rds"))
+mci_dat <- readRDS(file.path(DATA_CLEANED_PATH$filtered, "PREVENTAD_MCI_filtered.rds"))
 predictors_dat <- readRDS(file.path(DATA_CLEANED_PATH$filtered, "PREVENTAD_predictors.rds"))
-```
-
-```{r biomarker-data}
-ptau217_last <- biomarkers %>%
-  group_by(CONP_ID) %>%
-  filter(!is.na(ptau217)) %>%
-  select(CONP_ID, Date_taken, age, ptau217) %>%
-  slice_tail() 
-
-other_biomarkers_last <- biomarkers %>%
-  group_by(CONP_ID) %>%
-  select(CONP_ID, all_of(BIOMARKERS)) %>%
-  select(-ptau217) %>%
-  filter_at(vars(-CONP_ID), all_vars(!is.na(.))) %>%
-  slice_tail() 
-
-all_dat <- predictors_dat %>% 
-  left_join((ptau217_last %>%
-               select(CONP_ID, ptau217)), by="CONP_ID") %>%
-  left_join(other_biomarkers_last, by="CONP_ID") %>%
-  mutate(gfap_log = log(gfap),
-         nfl_log = log(nfl),
-         ptau181_log = log(ptau181),
-         ptau217_log = log(ptau217),
-         ptau231_sqrt = sqrt(ptau231)) %>%
-  column_to_rownames(var="CONP_ID")
 ```
 
 
@@ -57,16 +30,16 @@ models <- tribble(~model, ~predictors,
                   "model0", "age + sex + BMI",
                   "model1", "age + sex + BMI + GRS + apoe",
                   "model2", "age + sex + BMI + GRS + apoe + family_history",
-                  "model3", "age + sex + BMI + GRS + apoe + family_history + score_libra2",
+                  "model3", "age + sex + GRS + apoe + family_history + score_libra2",
                   "model4", "GRS + apoe + family_history + score_cogd") 
 
 all_preventad <- expand_grid(
-  outcome = outcomes,
+  outcome = BIOMARKERS_TRANS,
   models
   ) %>%
   mutate(
     eq = glue("{outcome} ~ {predictors}"),
-    res = map(eq, ~lm(as.formula(.), data = all_dat)),
+    res = map(eq, ~lm(as.formula(.), data = lastvisit_dat)),
     dataf = map(res, tidy),
     mod = map(res, glance)
   )
@@ -144,7 +117,7 @@ for (i in models$model){
     i == "model1" ~ "Model 1: Biomarker ~ Demographics + Genetics",
     i == "model2" ~ "Model 2: Biomarker ~ Demographics + Genetics + Family History",
     i == "model3" ~ "Model 3: Biomarker ~ Demographics + Genetics + Family History + LIBRA2",
-    i == "model4" ~ "Model 4: Biomarker ~ Genetics + Family History + CogDRISK",
+    i == "model4" ~ "Model 4: Biomarker ~ Genetics + Family History + CogDrisk",
     TRUE ~ paste("Model:", i)
   )
   
@@ -182,6 +155,10 @@ for (i in models$model){
       label = md("**ptau231**"),
       columns = ends_with("ptau231_sqrt")
     ) %>%
+    tab_spanner(
+      label = md("**ptau217/AB42**"),
+      columns = ends_with("ab42_ratio_log")
+    ) %>%
     cols_label(
       starts_with("estimate")~ md("*Beta*"),
       starts_with("std.error")~ md("*SE*"),
@@ -209,7 +186,7 @@ for (i in models$model){
     i == "model1" ~ "Model 1: Biomarker ~ Demographics + Genetics",
     i == "model2" ~ "Model 2: Biomarker ~ Demographics + Genetics + Family History",
     i == "model3" ~ "Model 3: Biomarker ~ Demographics + Genetics + Family History + LIBRA2",
-    i == "model4" ~ "Model 4: Biomarker ~ Demographics + Genetics + Family History + CogDRISK",
+    i == "model4" ~ "Model 4: Biomarker ~ Demographics + Genetics + Family History + CogDrisk",
     TRUE ~ paste("Model:", i)
   )
   
@@ -288,7 +265,7 @@ for (i in models$model){
     i == "model1" ~ "Model 1: Biomarker ~ Demographics + Genetics",
     i == "model2" ~ "Model 2: Biomarker ~ Demographics + Genetics + Family History",
     i == "model3" ~ "Model 3: Biomarker ~ Demographics + Genetics + Family History + LIBRA2",
-    i == "model4" ~ "Model 4: Biomarker ~ Demographics + Genetics + Family History + CogDRISK",
+    i == "model4" ~ "Model 4: Biomarker ~ Demographics + Genetics + Family History + CogDrisk",
     TRUE ~ paste("Model:", i)
   )
   
