@@ -39,7 +39,10 @@ AIM1_OUTPUT_PATH <- list(
   stratified = here("results", "Aim1", "stratified")
 )
 
-DATA_INTERMEDIATE_PATH <- here("data", "intermediate")
+DATA_INTERMEDIATE_PATH <- list(
+  PREVENTAD = here("data", "intermediate", "PREVENTAD"),
+  BRANCH = here("data", "intermediate", "BRANCH")
+)
 
 DATA_CLEANED_PATH <- list(
   cleaned = here("data", "cleaned"),

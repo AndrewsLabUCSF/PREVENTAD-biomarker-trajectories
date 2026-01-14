@@ -8,4 +8,4 @@ data/
 results/.DS_Store
 results/EDA/.DS_Store
 
-.png
+*.png

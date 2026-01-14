@@ -1,6 +1,9 @@
 ---
 title: "Aim 1: Risk Burden"
-format: html
+format:
+  html:
+    embed-resources: true  # This is the KEY setting
+    self-contained: true
 ---
 
 ```{r setup, include=FALSE}
@@ -19,10 +22,7 @@ lastvisit_dat <- readRDS(file.path(DATA_CLEANED_PATH$filtered, "PREVENTAD_lastvi
 # mci_dat <- readRDS(file.path(DATA_CLEANED_PATH$filtered, "PREVENTAD_MCI_filtered.rds"))
 ```
 
-# Summary of findings:
 
-
-# CRS vs diagnosis
 ```{r crs-vs-diagnosis-plot}
 #| fig-width: 12
 #| fig-height: 18
@@ -76,8 +76,6 @@ risk_dat <- lastvisit_dat %>%
   mutate(
     grs_decile = ntile(GRS, 10),
     grs_burden = if_else(grs_decile == 10, 1, 0),
-    # grs_burden = ifelse(GRS > mean(GRS, na.rm = TRUE) + sd(GRS, na.rm = TRUE), 
-    #                     1, 0),
     fhx_burden = if_else(family_history == "1 FDR", 0, 1),
     apoe_burden = if_else(apoe == "e4+", 1, 0),
     
@@ -94,8 +92,10 @@ risk_dat <- lastvisit_dat %>%
                                       1, 0),
     libra2_binary_quartile = ifelse(score_libra2 >= quantile(score_libra2, 0.75, na.rm = TRUE), 
                                       1, 0),
-    risk_score_2 = rowSums(across(c(fhx_burden, apoe_burden, cogdrisk_binary_quartile,
-                                    libra2_binary_quartile, grs_burden))),
+    risk_score_cogd_2 = rowSums(across(c(fhx_burden, apoe_burden, cogdrisk_binary_quartile,
+                                    grs_burden))),
+    risk_score_libra2_2 = rowSums(across(c(fhx_burden, apoe_burden, libra2_binary_quartile,
+                                    grs_burden))),
     
     # Strategy 3: 1 SD above mean
     cogdrisk_binary_1sd = ifelse(score_cogd > mean(score_cogd, na.rm = TRUE) + 
@@ -104,8 +104,10 @@ risk_dat <- lastvisit_dat %>%
     libra2_binary_1sd = ifelse(score_libra2 > mean(score_libra2, na.rm = TRUE) + 
                                     sd(score_libra2, na.rm = TRUE), 
                                  1, 0),
-    risk_score_3 = rowSums(across(c(fhx_burden, apoe_burden, cogdrisk_binary_1sd,
-                                    libra2_binary_1sd, grs_burden))),
+    risk_score_cogd_3 = rowSums(across(c(fhx_burden, apoe_burden, cogdrisk_binary_1sd,
+                                    grs_burden))),
+    risk_score_libra2_3 = rowSums(across(c(fhx_burden, apoe_burden, libra2_binary_1sd,
+                                    grs_burden))),
   ) 
 
 risk_dat_longer <- risk_dat %>%
@@ -128,7 +130,7 @@ plot_cutoffs <- function(data, score_var, score_name) {
   cutoff_decile <- quantile(data[[score_var]], 0.90, na.rm = TRUE)
 
   
-  ggplot(data, aes(x = .data[[score_var]], y=..density..)) +
+  ggplot(data, aes(x = .data[[score_var]], y=after_stat(density))) +
     geom_histogram(bins = 25, fill = "steelblue", alpha = 0.7) +
     geom_density(col="red") +
     geom_vline(aes(xintercept = cutoff_tertile, color = "Top Tertile"), 
@@ -215,41 +217,77 @@ cutoff_sample_sizes %>%
 ```
 
 
-## Check for burden associations with biomarker levels
-```{r risk-burden-assoc, include=FALSE}
+## Burden associations with biomarker levels
+```{r risk-burden-assoc, warning=FALSE}
+#| fig-width: 12
+#| fig-height: 18
+#| out-width: "100%"
 risk_scores_longer <- risk_dat_longer %>%
-  select(CONP_ID, risk_score_1, risk_score_2, risk_score_3,
-         biomarker, measure) %>%  
-  pivot_longer(cols = c(risk_score_1, risk_score_2, risk_score_3),
+  select(CONP_ID, risk_score_cogd_1, risk_score_libra2_1,
+         risk_score_cogd_2, risk_score_libra2_2,
+         risk_score_cogd_3, risk_score_libra2_3,
+         biomarker, measure) %>%
+  pivot_longer(cols = c(risk_score_cogd_1, risk_score_libra2_1,
+                        risk_score_cogd_2, risk_score_libra2_2,
+                        risk_score_cogd_3, risk_score_libra2_3),
                names_to = "risk_score_type",
                values_to = "risk_score_value") %>%
   mutate(
-    risk_score_label = case_when(
-      risk_score_type == "risk_score_1" ~ "Top Tertile (67th %ile)",
-      risk_score_type == "risk_score_2" ~ "Top Quartile (75th %ile)",
-      risk_score_type == "risk_score_3" ~ "1 SD Above Mean"
+    # Extract model type (cogd or libra2)
+    model_type = case_when(
+      str_detect(risk_score_type, "cogd") ~ "CogDrisk",
+      str_detect(risk_score_type, "libra2") ~ "LIBRA2"
     ),
+    
+    # Extract strategy number
+    strategy_label = case_when(
+      endsWith(risk_score_type, "1") ~ "Top Tertile (67th %ile)",
+      endsWith(risk_score_type, "2") ~ "Top Quartile (75th %ile)",
+      endsWith(risk_score_type, "3") ~ "1 SD Above Mean"
+    ),
+    
     risk_score_factor = factor(risk_score_value)
   )
 
-combined_risk_plot <- ggplot(risk_scores_longer, 
-                              aes(x = risk_score_factor, y = measure, fill = risk_score_factor)) +
+# CogDrisk only
+cogdrisk_plot <- risk_scores_longer %>%
+  filter(model_type == "CogDrisk") %>%
+  ggplot(aes(x = risk_score_factor, y = measure, fill = risk_score_factor)) +
   geom_violin(alpha = 0.7) +
   geom_boxplot(width = 0.1, fill = "white") +
-  facet_grid(biomarker ~ risk_score_label, scales = "free") +
-  stat_compare_means(method = "anova",  
+  facet_grid(biomarker ~ strategy_label, scales = "free") +
+  stat_compare_means(method = "anova",
                      label.y.npc = 0.8,
                      geom = "label",
                      size = 2) +
-  labs(x = "Composite Risk Score (0-5)",
+  labs(x = "CogDrisk Composite Risk Score",
        y = "Biomarker Level",
-       title = "Biomarker Levels by Composite Risk Score Across Strategies") +
+       title = "Biomarker Levels by CogDrisk Composite Risk Score") +
   theme_bw() +
   theme(legend.position = "none",
         axis.text.x = element_text(size = 8),
         strip.text = element_text(size = 8))
+cogdrisk_plot
 
-combined_risk_plot
+# LIBRA2 only
+libra2_plot <- risk_scores_longer %>%
+  filter(model_type == "LIBRA2") %>%
+  ggplot(aes(x = risk_score_factor, y = measure, fill = risk_score_factor)) +
+  geom_violin(alpha = 0.7) +
+  geom_boxplot(width = 0.1, fill = "white") +
+  facet_grid(biomarker ~ strategy_label, scales = "free") +
+  stat_compare_means(method = "anova",
+                     label.y.npc = 0.8,
+                     geom = "label",
+                     size = 2) +
+  labs(x = "LIBRA2 Composite Risk Score",
+       y = "Biomarker Level",
+       title = "Biomarker Levels by LIBRA2 Composite Risk Score") +
+  theme_bw() +
+  theme(legend.position = "none",
+        axis.text.x = element_text(size = 8),
+        strip.text = element_text(size = 8))
+libra2_plot
 
 # ggsave(file.path(AIM1_OUTPUT_PATH$figures, "PREVENTAD_risk_plot.png"), combined_risk_plot, width = 14, height = 14, dpi = 300)
 ```
