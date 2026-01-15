@@ -82,7 +82,7 @@ BRANCH_cleaned_dat$janssen <- BRANCH_cleaned_dat$janssen %>%
 first_biomarker <- bind_rows(
   BRANCH_cleaned_dat$janssen %>% select(PIDN, DCDate),
   BRANCH_cleaned_dat$quanterix %>% select(PIDN, DCDate)
-) %>%
+  ) %>%
   mutate(DCDate = as.Date(DCDate)) %>%
   group_by(PIDN) %>%
   summarise(first_biomarker_date = min(DCDate, na.rm = TRUE), .groups = "drop")
@@ -114,8 +114,34 @@ diagnosis_latest_df <- BRANCH_dat$diagnosis_latest %>%
   filter(clin_syn_best_est != "") %>%
   slice(1)
 
+# For PIDNs missing from diagnosis_latest, get the last diagnosis from diagnosis table
+missing_pidns <- setdiff(BRANCH_cleaned_dat$APOE$PIDN, diagnosis_latest_df$PIDN)
+
+diagnosis_latest_combined <- bind_rows(
+  diagnosis_latest_df,
+  diagnosis_latest_from_longitudinal
+)
+
+diagnosis_latest_combined <- diagnosis_latest_combined %>%
+  mutate(
+    progression_group = case_when(
+      # Cognitively Normal (without symptoms)
+      grepl('CLINICALLY NORMAL', clin_syn_best_est, ignore.case = TRUE) &
+        !grepl('SYMPTOMS', clin_syn_best_est) ~ 'CN',
+      # SCD/SCI (Subjective Cognitive Decline/Impairment)
+      grepl('CLINICALLY NORMAL.*SYMPTOMS', clin_syn_best_est, ignore.case = TRUE) ~ 'SCD',
+      grepl('SUBJECTIVE.*IMPAIR', clin_syn_best_est, ignore.case = TRUE) ~ 'SCD',
+      # MCI (Mild Cognitive Impairment)
+      grepl('MCI', clin_syn_best_est, ignore.case = TRUE) ~ 'MCI',
+      # Dementia
+      grepl('DEMENTIA|ALZHEIMER', clin_syn_best_est, ignore.case = TRUE) ~ 'Dementia',
+      TRUE ~ 'Other'
+    ),
+    progression_group = factor(progression_group, levels = c("CN", "SCD", "MCI", "Dementia", "Other"))
+  )
+
 BRANCH_cleaned_dat$diagnosis <- diagnosis_df
-BRANCH_cleaned_dat$diagnosis_latest <- diagnosis_latest_df
+BRANCH_cleaned_dat$diagnosis_latest <- diagnosis_latest_combined
 
 
 # HEALTH HISTORY ----------------------------------------------------------
@@ -154,7 +180,6 @@ df <- BRANCH_dat$physical %>%
   )
 
 BRANCH_cleaned_dat$physical <- df  
-
 
 
 # CLINICAL LABS -----------------------------------------------------------
