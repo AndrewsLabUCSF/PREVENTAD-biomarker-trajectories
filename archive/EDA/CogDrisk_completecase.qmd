@@ -1,166 +1,364 @@
 ---
-title: "CogDrisk Complete Case Analysis"
+title: "BRANCH CogDRisk Complete Case Analysis"
 format: html
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = FALSE, message = FALSE, warnings = FALSE)
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
 knitr::opts_knit$set(root.dir = here::here())
 ```
 
 ```{r setting}
+library(tidyverse)
 library(ggpubr)
-library(missForest)
+library(gtsummary)
+library(patchwork)
 
 source('workflow/scripts/config.R')
 source(CRS_FN)
-source(COGD_RECODE_FN)
 
-clinical_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_clinical_raw.rds"))
-lifestyle_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_lifestyle_raw.rds"))
-
-dat_cogd_scored <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_cogd_scored.rds"))
-dat_cogd_imp_scored <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_cogd_imp_scored.rds"))
-dat_cogd_exer_imp_scored <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_cogd_exercise1_imp_scored.rds"))
+BRANCH_cleaned_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH$BRANCH, "BRANCH_cleaned.rds"))
+dat_cogd <- readRDS(file.path(DATA_INTERMEDIATE_PATH$BRANCH, "BRANCH_cogd_dat.rds"))
+dat_cogd_scored <- readRDS(file.path(DATA_INTERMEDIATE_PATH$BRANCH, "BRANCH_cogd_scored_dat.rds"))
+dat_cogd_imp_scored <- readRDS(file.path(DATA_INTERMEDIATE_PATH$BRANCH, "BRANCH_cogd_imp_scored_dat.rds"))
 ```
 
 
-## Complete CogDrisk scores
+## Calculate completeness metrics
 ```{r}
-complete_cogd <- dat_cogd_scored %>%
+dat_cogd_completeness <- dat_cogd_scored %>%
+  mutate(
+    num_cogdrisk_vars = rowSums(!is.na(select(., -PIDN, -score_cogd))),
+    complete_scores = complete.cases(select(., -PIDN, -score_cogd))
+  ) %>%
+  relocate(score_cogd, .after = PIDN) %>%
+  relocate(complete_scores, .after = score_cogd) %>%
+  relocate(num_cogdrisk_vars, .after = complete_scores)
+
+complete_cogd <- dat_cogd_completeness %>%
   filter(complete_scores == TRUE)
+
+cat("Total participants:", nrow(dat_cogd_completeness), "\n")
+cat("Complete cases:", nrow(complete_cogd), "\n")
+cat("Proportion complete:", round(nrow(complete_cogd) / nrow(dat_cogd_completeness) * 100, 1), "%\n")
 ```
 
-## CogDrisk scores by number of factors used for calculation
-```{r}
-df <- dat_cogd_scored %>%
-  select(CONP_ID, score, num_cogdrisk_vars, complete_scores) 
 
-ggplot(df, aes(x=num_cogdrisk_vars)) +
+## CogDRisk scores by number of factors used for calculation
+```{r}
+df <- dat_cogd_completeness %>%
+  select(PIDN, score_cogd, num_cogdrisk_vars, complete_scores)
+
+ggplot(df, aes(x = num_cogdrisk_vars)) +
   geom_bar(fill = "steelblue") +
-  scale_x_continuous(labels=df$num_cogdrisk_vars, breaks=df$num_cogdrisk_vars) +
   geom_text(stat = "count",
-            aes(label=after_stat(count)),
-            vjust = -0.5)
-
-completeness_summary <- df %>%
-   group_by(num_cogdrisk_vars) %>%
-   summarise(
-     percent_cases = (n() / nrow(df)) * 100,
-     min_score = min(score),
-     mean_score = mean(score),
-     max_score = max(score),
-     sd_score = sd(score)
-   )
-completeness_summary
-
-ggplot(complete_cogd, aes(x=score, y=as.factor(1))) +
-  geom_violin() 
-```
-
-
-## Comparing missing data imputation techniques
-```{r}
-# Dataframe of all scores
-df2 <- complete_cogd %>%
-  select(CONP_ID, complete_score=score) %>%
-  # Imputing all data
-  left_join((dat_cogd_imp_scored %>%
-               select(CONP_ID, imp_all_score=score)),
-            by="CONP_ID") %>%
-  # Imputing all lifestyle vars and first exercise activities
-  left_join((dat_cogd_exer_imp_scored %>%
-              select(CONP_ID, imp_exer_score=score)),
-            by="CONP_ID")
-
-# Pivot longer for ggplot  
-df2_longer <- df2 %>%
-  pivot_longer(
-    cols = c(complete_score, imp_all_score, imp_exer_score),
-    names_to = "method",
-    values_to = "score_value"
-  ) %>%
-  mutate(method = recode(method,
-                         "complete_score" = "original (complete cases)",
-                         "imp_all_score" = "imputed (all data)",
-                         "imp_exer_score" = "imputed (exer_act1)"))
-
-# SD ratio and Wilcox tests
-var_ratio1 <- sd(df2$imp_all_score) / sd(df2$complete_score, na.rm = TRUE)
-var_ratio2 <- sd(df2$imp_exer_score) / sd(df2$complete_score, na.rm = TRUE)
-wilcox.test(df2$complete_score, df2$imp_all_score)
-wilcox.test(df2$complete_score, df2$imp_exer_score)
-
-plot1 <- ggplot(df2_longer, aes(x=method, y=score_value, fill=method)) +
-  geom_violin(alpha=0.7) +
-  geom_boxplot(width=0.1, fill="white") +
-  stat_compare_means(
-    comparisons = list(c("imputed (all data)", "original (complete cases)"),
-                       c("imputed (exer_act1)", "original (complete cases)")),
-    method="wilcox.test",
-    label.x=1.5
+            aes(label = after_stat(count)),
+            vjust = -0.5) +
+  labs(
+    title = "Distribution of CogDRisk Completeness",
+    x = "Number of CogDRisk variables available",
+    y = "Count"
   ) +
-  labs(subtitle=paste0("SD ratio (imputed (all) vs cogd) = ", round(var_ratio1, 3), 
-                       "; SD ratio (imputed (exer_act1) vs cogd) = ", round(var_ratio2, 3))) +
-  ggtitle("Comparing imputation techniques for CogDrisk against original complete cases")
-
-plot1
-# ggsave(plot1, filename = file.path(EDA_OUTPUT_PATH$figures, "CogD_imputation_comparison.png"))
+  theme_minimal()
 ```
 
 
-
-### Scatterplots of CogDrisk vs BBM (at first visit)
+## Summary statistics by completeness
 ```{r}
-df3 <- data_cogd_scored %>%
-  select(CONP_ID, score) %>%
-  left_join((complete_cogd %>%
-               select(CONP_ID, complete_score=score)),
-            by="CONP_ID") %>%
-  left_join((data_cogd_imp_scored %>%
-               select(CONP_ID, imp_score=score)),
-            by="CONP_ID") %>%
-  left_join((PREVENTAD_dat$plasma_ptau217 %>%
-               group_by(CONP_ID) %>%
-               slice(1)), by="CONP_ID") %>%
-  select(CONP_ID, score, complete_score, imp_score, ptau217_simoa_UGOT) %>%
+completeness_summary <- df %>%
+  group_by(num_cogdrisk_vars) %>%
+  summarise(
+    n_cases = n(),
+    percent_cases = round((n() / nrow(df)) * 100, 1),
+    min_score = round(min(score_cogd, na.rm = TRUE), 2),
+    mean_score = round(mean(score_cogd, na.rm = TRUE), 2),
+    max_score = round(max(score_cogd, na.rm = TRUE), 2),
+    sd_score = round(sd(score_cogd, na.rm = TRUE), 2)
+  ) %>%
+  arrange(desc(num_cogdrisk_vars))
+
+completeness_summary
+```
+
+
+## Distribution of original and imputed scores
+```{r}
+ggplot(dat_cogd_scored, aes(x = score_cogd)) +
+  geom_histogram(bins = 20, fill = "steelblue", alpha = 0.7) +
+  geom_density(aes(y = after_stat(count)), color = "darkblue", linewidth = 1) +
+  labs(
+    title = "Distribution of CogDRisk Scores (Original Data)",
+    x = "CogDRisk Score",
+    y = "Count"
+  ) +
+  theme_minimal()
+ggplot(dat_cogd_imp_scored, aes(x = score_cogd)) +
+  geom_histogram(bins = 20, fill = "steelblue", alpha = 0.7) +
+  geom_density(aes(y = after_stat(count)), color = "darkblue", linewidth = 1) +
+  labs(
+    title = "Distribution of CogDRisk Scores (Imputed Data)",
+    x = "CogDRisk Score",
+    y = "Count"
+  ) +
+  theme_minimal()
+
+ggplot(dat_cogd_scored, aes(x = score_cogd, y = 1)) +
+  geom_violin(fill = "steelblue", alpha = 0.7) +
+  geom_boxplot(width = 0.1, fill = "white") +
+  labs(
+    title = "CogDRisk Score Distribution (Original)",
+    x = "CogDRisk Score",
+    y = ""
+  ) +
+  theme_minimal() +
+  theme(axis.text.y = element_blank(),
+        axis.ticks.y = element_blank())
+ggplot(dat_cogd_imp_scored, aes(x = score_cogd, y = 1)) +
+  geom_violin(fill = "steelblue", alpha = 0.7) +
+  geom_boxplot(width = 0.1, fill = "white") +
+  labs(
+    title = "CogDRisk Score Distribution (Imputed)",
+    x = "CogDRisk Score",
+    y = ""
+  ) +
+  theme_minimal() +
+  theme(axis.text.y = element_blank(),
+        axis.ticks.y = element_blank())
+```
+
+
+## Missing data patterns
+```{r}
+missing_pattern <- dat_cogd %>%
+  select(-PIDN) %>%
+  summarise(across(everything(), ~ sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "Variable", values_to = "Missing_Count") %>%
+  mutate(
+    Missing_Percent = round((Missing_Count / nrow(dat_cogd)) * 100, 1)
+  ) %>%
+  arrange(desc(Missing_Count))
+
+ggplot(missing_pattern, aes(x = reorder(Variable, Missing_Count), y = Missing_Count)) +
+  geom_bar(stat = "identity", fill = "coral") +
+  geom_text(aes(label = paste0(Missing_Percent, "%")),
+            hjust = -0.2, size = 3) +
+  coord_flip() +
+  labs(
+    title = "Missing Data by Variable",
+    x = "Variable",
+    y = "Number of Missing Cases"
+  ) +
+  theme_minimal()
+
+missing_pattern
+```
+
+
+## Scatterplots of CogDRisk vs Biomarkers (first visit)
+```{r}
+# Get first biomarker measurements
+janssen_first <- BRANCH_cleaned_dat$janssen %>%
+  group_by(PIDN) %>%
+  slice(1) %>%
+  ungroup()
+
+quanterix_first <- BRANCH_cleaned_dat$quanterix %>%
+  group_by(PIDN) %>%
+  slice(1) %>%
+  ungroup()
+
+# Combine original and imputed scores with biomarkers
+cogd_bbm <- dat_cogd_scored %>%
+  select(PIDN, score_original = score_cogd) %>%
+  left_join(
+    dat_cogd_imp_scored %>% select(PIDN, score_imputed = score_cogd),
+    by = "PIDN"
+  ) %>%
+  left_join(
+    janssen_first %>% select(PIDN, gfap_janssen, nfl_janssen, ptau217_janssen),
+    by = "PIDN"
+  ) %>%
+  left_join(
+    quanterix_first %>% select(PIDN, ab_ratio, gfap, nfl, ptau181),
+    by = "PIDN"
+  )
+
+# p-tau217 (Janssen)
+if (sum(!is.na(cogd_bbm$ptau217_janssen)) > 0) {
+  p1 <- ggplot(cogd_bbm, aes(x = score_original, y = ptau217_janssen)) +
+    geom_point(shape = 1, alpha = 0.6) +
+    geom_smooth(method = "lm", color = "blue") +
+    stat_cor(method = "spearman") +
+    labs(
+      title = "CogDRisk vs p-tau217 (Janssen)",
+      x = "CogDRisk Score (Original)",
+      y = "p-tau217 (pg/mL)"
+    ) +
+    theme_minimal()
+  print(p1)
+  
+  p2 <- ggplot(cogd_bbm, aes(x = score_imputed, y = ptau217_janssen)) +
+    geom_point(shape = 1, alpha = 0.6) +
+    geom_smooth(method = "lm", color = "blue") +
+    stat_cor(method = "spearman") +
+    labs(
+      title = "CogDRisk vs p-tau217 (Janssen)",
+      x = "CogDRisk Score (Imputed)",
+      y = "p-tau217 (pg/mL)"
+    ) +
+    theme_minimal()
+  
+  ptau217_plot <- p1 / p2
+  print(ptau217_plot)
+}
+
+# p-tau181 (Quanterix)
+if (sum(!is.na(cogd_bbm$ptau181)) > 0) {
+  p1 <- ggplot(cogd_bbm, aes(x = score_original, y = ptau181)) +
+    geom_point(shape = 1, alpha = 0.6) +
+    geom_smooth(method = "lm", color = "blue") +
+    stat_cor(method = "spearman") +
+    labs(
+      title = "CogDRisk vs p-tau181 (Quanterix)",
+      x = "CogDRisk Score (Original)",
+      y = "p-tau181 (pg/mL)"
+    ) +
+    theme_minimal()
+  
+  p2 <- ggplot(cogd_bbm, aes(x = score_imputed, y = ptau181)) +
+    geom_point(shape = 1, alpha = 0.6) +
+    geom_smooth(method = "lm", color = "blue") +
+    stat_cor(method = "spearman") +
+    labs(
+      title = "CogDRisk vs p-tau181 (Quanterix)",
+      x = "CogDRisk Score (Imputed)",
+      y = "p-tau181 (pg/mL)"
+    ) +
+    theme_minimal()
+  
+  ptau181_plot <- p1 / p2
+  print(ptau181_plot)
+}
+
+# GFAP (Janssen)
+if (sum(!is.na(cogd_bbm$gfap_janssen)) > 0) {
+  p1 <- ggplot(cogd_bbm, aes(x = score_original, y = gfap_janssen)) +
+    geom_point(shape = 1, alpha = 0.6) +
+    geom_smooth(method = "lm", color = "blue") +
+    stat_cor(method = "spearman") +
+    labs(
+      title = "CogDRisk vs GFAP (Janssen)",
+      x = "CogDRisk Score (Original)",
+      y = "GFAP (pg/mL)"
+    ) +
+    theme_minimal()
+  
+  p2 <- ggplot(cogd_bbm, aes(x = score_imputed, y = gfap_janssen)) +
+    geom_point(shape = 1, alpha = 0.6) +
+    geom_smooth(method = "lm", color = "blue") +
+    stat_cor(method = "spearman") +
+    labs(
+      title = "CogDRisk vs GFAP (Janssen)",
+      x = "CogDRisk Score (Imputed)",
+      y = "GFAP (pg/mL)"
+    ) +
+    theme_minimal()
+  
+  gfap_plot <- p1 / p2
+  print(gfap_plot)
+}
+
+# Aβ42/40 ratio (Quanterix)
+if (sum(!is.na(cogd_bbm$ab_ratio)) > 0) {
+  p1 <- ggplot(cogd_bbm, aes(x = score_original, y = ab_ratio)) +
+    geom_point(shape = 1, alpha = 0.6) +
+    geom_smooth(method = "lm", color = "blue") +
+    stat_cor(method = "spearman") +
+    labs(
+      title = "CogDRisk vs Aβ42/40 ratio",
+      x = "CogDRisk Score (Original)",
+      y = "Aβ42/40 ratio"
+    ) +
+    theme_minimal()
+  
+  p2 <- ggplot(cogd_bbm, aes(x = score_imputed, y = ab_ratio)) +
+    geom_point(shape = 1, alpha = 0.6) +
+    geom_smooth(method = "lm", color = "blue") +
+    stat_cor(method = "spearman") +
+    labs(
+      title = "CogDRisk vs Aβ42/40 ratio",
+      x = "CogDRisk Score (Imputed)",
+      y = "Aβ42/40 ratio"
+    ) +
+    theme_minimal()
+  
+  abratio_plot <- p1 / p2
+  print(abratio_plot)
+}
+```
+
+
+## Summary table of complete cases
+```{r}
+complete_cogd %>%
+  select(score_cogd, Age, Sex, Education_level, apoe) %>%
+  tbl_summary(
+    statistic = list(
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    label = list(
+      score_cogd = "CogDRisk Score",
+      Age = "Age",
+      Sex = "Sex",
+      Education_level = "Education Level",
+      apoe = "APOE Status"
+    )
+  ) %>%
+  modify_caption("**Characteristics of Complete CogDRisk Cases (n = {N})**") %>%
+  bold_labels()
+```
+
+
+## Comparing original scores vs imputed scores
+```{r}
+# Combine complete and imputed scores
+df_comparison <- dat_cogd_scored %>%
+  select(PIDN, original_score = score_cogd) %>%
+  left_join(
+    dat_cogd_imp_scored %>% select(PIDN, imputed_score = score_cogd),
+    by = "PIDN"
+  ) %>%
   pivot_longer(
-    cols = c(score, complete_score, imp_score),
+    cols = c(original_score, imputed_score),
     names_to = "method",
     values_to = "score_value"
   ) %>%
   mutate(method = recode(method,
-                         "score" = "original",
-                         "complete_score" = "original (complete cases)",
-                         "imp_score" = "imputed"))
+                        "original_score" = "Original",
+                        "imputed_score" = "Imputed Data"))
 
-ggplot(df3, aes(x=score_value, y=ptau217_simoa_UGOT, color=method)) +
-  geom_point() +
-  facet_wrap(~method) +
-  ggtitle("Scatterplot of CogDrisk scores vs ptau217 (at first visit)") +
-  geom_smooth(method=lm)
-  # geom_density_2d(aes(fill=..density..),z geom="raster")
+# Calculate SD ratio and perform Wilcoxon test
+original_scores <- dat_cogd_scored$score_cogd
+imputed_scores <- dat_cogd_imp_scored$score_cogd 
 
-ipms_bbm <- complete_cogd
-  left_join((ipms_dataset %>%
-              select(CONP_ID, Study_visit_label, ptau181_simoa_UGOT,
-                     GFAP_simoa_4plex, AB_ratio_simoa_4plex) %>%
-              group_by(CONP_ID) %>%
-              slice(1)),
-            by="CONP_ID")
+sd_ratio <- sd(imputed_scores, na.rm = TRUE) / sd(original_scores, na.rm = TRUE)
+wilcox_result <- wilcox.test(original_scores, imputed_scores)
 
-ggplot(ipms_bbm, aes(x=score, y=ptau181_simoa_UGOT)) +
-  geom_point(shape=1) +
-  ggtitle("Scatterplot of CogDrisk score vs ptau181 (at first visit)") +
-  geom_smooth(method="lm")
+ggplot(df_comparison, aes(x = method, y = score_value, fill = method)) +
+  geom_violin(alpha = 0.7) +
+  geom_boxplot(width = 0.1, fill = "white") +
+  stat_compare_means(method = "wilcox.test", label.x = 1.5) +
+  labs(
+    title = "CogDRisk Scores: Original vs Imputed Data",
+    subtitle = paste0("SD ratio (Imputed/Original) = ", round(sd_ratio, 3)),
+    x = "Method",
+    y = "CogDRisk Score"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
 
-ggplot(ipms_bbm, aes(x=score, y=GFAP_simoa_4plex)) +
-  geom_point(shape=1) +
-  ggtitle("Scatterplot of CogDrisk score vs GFAP (at first visit)") +
-  geom_smooth(method="lm")
-
-ggplot(ipms_bbm, aes(x=score, y=AB_ratio_simoa_4plex)) +
-  geom_point(shape=1) +
-  ggtitle("Scatterplot of CogDrisk score vs AB ratio (at first visit)") +
-  geom_smooth(method="lm")
+cat("\nWilcoxon test p-value:", wilcox_result$p.value, "\n")
+cat("Mean score (complete):", round(mean(original_scores, na.rm = TRUE), 2), "\n")
+cat("Mean score (original):", round(mean(imputed_scores, na.rm = TRUE), 2), "\n")
 ```
