@@ -23,7 +23,7 @@ BIOMARKERS_TRANS <- c("ab_ratio", "gfap_log", "nfl_log", "ptau181_log",
 
 
 # INPUT DATA PATH ---------------------------------------------------------
-RAW_PREVENTAD_DATA_PATH <- file.path("~/Library/CloudStorage/Box-Box/AndrewsLab/data/PREVENT-AD/data/")
+PREVENTAD_DATA_PATH <- file.path("~/Library/CloudStorage/Box-Box/AndrewsLab/data/PREVENT-AD/data/")
 
 
 # OUTPUT DATA PATHS -------------------------------------------------------
@@ -38,19 +38,9 @@ AIM1_OUTPUT_PATH <- list(
   stratified = here("results", "Aim1", "stratified")
 )
 
-DATA_INTERMEDIATE_PATH <- list(
-  PREVENTAD = here("data", "intermediate", "PREVENTAD"),
-  BRANCH = here("data", "intermediate", "BRANCH")
-)
+DATA_INTERMEDIATE_PATH <- here("data", "intermediate")
 
 DATA_CLEANED_PATH <- list(
   cleaned = here("data", "cleaned"),
   filtered = here("data", "cleaned", "filtered")
-)
-
-DATA_OUTPUT_PATHS <- list(
-  output = list(
-    figures = here("results", "figures"),
-    tables = here("results", "tables")
-  )
 )
