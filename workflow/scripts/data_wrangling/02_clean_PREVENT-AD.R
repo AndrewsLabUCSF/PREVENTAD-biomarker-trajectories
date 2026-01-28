@@ -119,12 +119,30 @@ clinical <- PREVENTAD_raw$demographics %>%
               treatment_hypertension, treatment_hyperlipidemia)
      ),
     by="CONP_ID") %>%
-  # self-reported clinical questionnaire variables
+  # head injury variables
   left_join(
     (PREVENTAD_raw$questionnaire %>%
        select(CONP_ID, head_injury_hospitalized, head_injury_severe) %>%
        filter_at(vars(head_injury_severe, head_injury_hospitalized), any_vars(!is.na(.)))
      ),
+    by="CONP_ID") %>%
+  # geriatric depression scale
+  left_join(
+    (PREVENTAD_raw$questionnaire %>%
+       select(CONP_ID, gds_score) %>%
+       filter(!is.na(gds_score)) %>%
+       group_by(CONP_ID) %>%
+       slice(1)
+    ),
+    by="CONP_ID") %>%
+  # pittsburgh score for insomnia
+  left_join(
+    (PREVENTAD_raw$questionnaire %>%
+       select(CONP_ID, pittsburgh_total_score) %>%
+       filter(!is.na(pittsburgh_total_score)) %>%
+       group_by(CONP_ID) %>%
+       slice(1)
+    ),
     by="CONP_ID") %>%
   # auditory
   left_join(
@@ -264,15 +282,6 @@ lifestyle <- criteria_met %>%
        slice(1)
      ),
     by="CONP_ID") %>%
-  # geriatric depression scale
-  left_join(
-    (PREVENTAD_raw$questionnaire %>%
-       select(CONP_ID, gds_score) %>%
-       filter(!is.na(gds_score)) %>%
-       group_by(CONP_ID) %>%
-       slice(1)
-     ),
-    by="CONP_ID") %>%
   # epoch score (cognitive activity)
   left_join(
     (PREVENTAD_raw$questionnaire %>%
@@ -280,15 +289,6 @@ lifestyle <- criteria_met %>%
        filter(!is.na(epoch_score_currently)) %>%
        group_by(CONP_ID) %>%
        slice(1)),
-    by="CONP_ID") %>%
-  # pittsburgh score for insomnia
-  left_join(
-    (PREVENTAD_raw$questionnaire %>%
-      select(CONP_ID, pittsburgh_total_score) %>%
-      filter(!is.na(pittsburgh_total_score)) %>%
-      group_by(CONP_ID) %>%
-      slice(1)
-    ),
     by="CONP_ID") %>%
   # physical activity
   left_join(
@@ -329,7 +329,6 @@ lifestyle <- criteria_met %>%
      ),
     by="CONP_ID")
   
-
 # Save dataset
 saveRDS(lifestyle, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_lifestyle.rds"))
 
