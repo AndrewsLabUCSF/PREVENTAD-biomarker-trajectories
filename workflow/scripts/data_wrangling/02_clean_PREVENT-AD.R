@@ -51,7 +51,7 @@ criteria_met <- biomarkers %>%
   filter(CONP_ID %in% gwas$CONP_ID)
 
 
-# DOMAIN SPECIFIC DATASETS ------------------------------------------------
+# RISK COMPONENT SPECIFIC DATASETS -----------------------------------------
 ## Steps:
 ##   1. Select variables
 ##   2. Filter
@@ -66,10 +66,37 @@ biomarkers_filtered <- biomarkers %>%
 saveRDS(biomarkers_filtered, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_biomarkers.rds"))
 
 
-## Clinical ----
-clinical <- PREVENTAD_raw$demographics %>%
+## Genetics ----
+# APOE and GWAS
+apoe_dat <- PREVENTAD_raw$genetics %>%
+  filter(CONP_ID %in% criteria_met$CONP_ID) %>%
+  mutate(
+    genotype = str_replace_all(APOE, " ", ""), 
+    allele1 = as.numeric(str_extract(genotype, "^\\d")),  # First number
+    allele2 = as.numeric(str_extract(genotype, "\\d$")),  # Last number
+    apoe_e4_count = (allele1 == 4) + (allele2 == 4),
+    apoe = case_when(
+      APOE == "3 2" ~ "e2+",
+      APOE == "3 3" ~ "e3/e3",
+      APOE %in% c("4 2", "4 3", "4 4") ~ "e4+",
+      TRUE ~ NA),
+    apoe = factor(apoe, levels=c("e3/e3", "e2+", "e4+"))
+  ) %>%
+  select(CONP_ID, apoe, apoe_e4_count)
+
+gwas_filtered <- gwas %>% filter(CONP_ID %in% criteria_met$CONP_ID)
+
+# Save datasets
+saveRDS(apoe_dat, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_APOE.rds"))
+saveRDS(gwas_filtered, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_GWAS.rds"))
+
+
+## CRS factors ----
+crs_factors <- PREVENTAD_raw$demographics %>%
   filter(CONP_ID %in% criteria_met$CONP_ID) %>%
   select(CONP_ID, Sex, Education_years, Height) %>%
+  # Change Sex to factor
+  mutate(Sex = factor(Sex, levels=c("Female", "Male"))) %>%
   left_join(
     # bp_pulse_weight
     (PREVENTAD_raw$bp_pulse_weight %>% 
@@ -80,14 +107,14 @@ clinical <- PREVENTAD_raw$demographics %>%
      ), 
     by="CONP_ID") %>%
   left_join( 
-    (PREVENTAD_raw$bp_pulse_weight %>%  # get first non-NA weight 
+    (PREVENTAD_raw$bp_pulse_weight %>%  # Get first non-NA weight 
        group_by(CONP_ID) %>%
        filter(!is.na(Weight)) %>%
        slice(1) %>%
        select(CONP_ID, Weight)
      ),
     by="CONP_ID") %>%
-  # lab; get first non-NA lab measurements
+  # Lab; get first non-NA lab measurements
   left_join(
     (PREVENTAD_raw$lab %>%
        filter(!is.na(total_cholesterol_value)) %>%
@@ -112,21 +139,22 @@ clinical <- PREVENTAD_raw$demographics %>%
        slice(1)
      ),
     by="CONP_ID") %>%
-  # medical history
+  # Medical history
   left_join(
     (PREVENTAD_raw$medical_history %>%
        select(CONP_ID, past_depression, past_atrial_fibrillation, treatment_diabetes,
-              treatment_hypertension, treatment_hyperlipidemia)
+              treatment_hypertension, treatment_hyperlipidemia) 
      ),
     by="CONP_ID") %>%
-  # head injury variables
+  # Head injury variables
   left_join(
     (PREVENTAD_raw$questionnaire %>%
        select(CONP_ID, head_injury_hospitalized, head_injury_severe) %>%
-       filter_at(vars(head_injury_severe, head_injury_hospitalized), any_vars(!is.na(.)))
+       filter_at(vars(head_injury_severe, head_injury_hospitalized), 
+                 any_vars(!is.na(.)))
      ),
     by="CONP_ID") %>%
-  # geriatric depression scale
+  # Geriatric depression scale
   left_join(
     (PREVENTAD_raw$questionnaire %>%
        select(CONP_ID, gds_score) %>%
@@ -135,7 +163,7 @@ clinical <- PREVENTAD_raw$demographics %>%
        slice(1)
     ),
     by="CONP_ID") %>%
-  # pittsburgh score for insomnia
+  # Pittsburgh score for insomnia
   left_join(
     (PREVENTAD_raw$questionnaire %>%
        select(CONP_ID, pittsburgh_total_score) %>%
@@ -144,18 +172,69 @@ clinical <- PREVENTAD_raw$demographics %>%
        slice(1)
     ),
     by="CONP_ID") %>%
-  # auditory
+  # Auditory
   left_join(
     (PREVENTAD_raw$auditory %>%
        select(CONP_ID, diagnosed_impairment, subjective_hearing_impairment) %>%
        group_by(CONP_ID) %>%
        slice(1)
      ),
+    by="CONP_ID") %>%
+  # Smoking
+  left_join(
+    (PREVENTAD_raw$questionnaire %>%
+       select(CONP_ID, smoking_present) %>%
+       filter(!is.na(smoking_present)) %>%
+       group_by(CONP_ID) %>%
+       slice(1)
+    ),
+    by="CONP_ID") %>%
+  # Epoch score (cognitive activity)
+  left_join(
+    (PREVENTAD_raw$questionnaire %>%
+       select(CONP_ID, epoch_score_currently) %>%
+       filter(!is.na(epoch_score_currently)) %>%
+       group_by(CONP_ID) %>%
+       slice(1)),
+    by="CONP_ID") %>%
+  # Physical activity
+  left_join(
+    (PREVENTAD_raw$questionnaire %>%
+       select(CONP_ID, starts_with("exer_curr_")) %>%
+       select(!matches("category")) %>%
+       filter(!is.na(exer_curr_act1_intensity)) %>%
+       group_by(CONP_ID) %>%
+       slice(1) %>%
+       # Convert character columns to numeric before recoding
+       mutate(across(starts_with("exer_curr_") & where(is.character), as.numeric)) %>%
+       # Recode exercise NAs to 0 for participants who have earlier activities
+       rowwise() %>%
+       mutate(
+         # For act2: if act1 has data and act2 is NA, set act2 to 0
+         across(starts_with("exer_curr_act2_"),
+                ~if_else(!is.na(exer_curr_act1_intensity) & is.na(.), 0, .)),
+         # For act3: if act1 has data and act3 is NA, set act3 to 0
+         across(starts_with("exer_curr_act3_"),
+                ~if_else(!is.na(exer_curr_act1_intensity) & is.na(.), 0, .)),
+         # For act4: if act1 has data and act4 is NA, set act4 to 0
+         across(starts_with("exer_curr_act4_"),
+                ~if_else(!is.na(exer_curr_act1_intensity) & is.na(.), 0, .)),
+         # For act5: if act1 has data and act5 is NA, set act5 to 0
+         across(starts_with("exer_curr_act5_"),
+                ~if_else(!is.na(exer_curr_act1_intensity) & is.na(.), 0, .))
+       ) %>%
+       ungroup()
+    ),
+    by="CONP_ID") %>%
+  # Social activity
+  left_join(
+    (PREVENTAD_raw$questionnaire %>%
+       select(CONP_ID, starts_with("social_life_")) %>%
+       group_by(CONP_ID) %>%
+       filter_at(vars(starts_with("social_life_")), any_vars(!is.na(.))) %>%
+       slice(1)
+    ),
     by="CONP_ID")
-
-# Save clinical dataset
-saveRDS(clinical, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_clinical.rds"))
-
 
 ### Medication ----
 # Only need to look for antihypertensives, antidiabetics, antihyperlipidemic, and antidepressants
@@ -193,33 +272,11 @@ meduse <- PREVENTAD_raw$meduse %>%
   distinct() %>%
   replace(is.na(.), 0)
 
-# Save medication dataset
-saveRDS(meduse, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_meduse.rds"))
+# Merge meduse data back with clinical table
+crs_factors <- crs_factors %>% left_join(meduse, by="CONP_ID")
 
-
-## Genetics ----
-# APOE and GWAS
-apoe_dat <- PREVENTAD_raw$genetics %>%
-  filter(CONP_ID %in% criteria_met$CONP_ID) %>%
-  mutate(
-    genotype = str_replace_all(APOE, " ", ""), 
-    allele1 = as.numeric(str_extract(genotype, "^\\d")),  # First number
-    allele2 = as.numeric(str_extract(genotype, "\\d$")),  # Last number
-    apoe_e4_count = (allele1 == 4) + (allele2 == 4),
-    apoe = case_when(
-      APOE == "3 2" ~ "e2+",
-      APOE == "3 3" ~ "e3/e3",
-      APOE %in% c("4 2", "4 3", "4 4") ~ "e4+",
-      TRUE ~ NA),
-    apoe = factor(apoe, levels=c("e3/e3", "e2+", "e4+"))
-  ) %>%
-  select(CONP_ID, apoe, apoe_e4_count)
-
-gwas_filtered <- gwas %>% filter(CONP_ID %in% criteria_met$CONP_ID)
-
-# Save datasets
-saveRDS(apoe_dat, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_APOE.rds"))
-saveRDS(gwas_filtered, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_GWAS.rds"))
+# Save CRS dataset
+saveRDS(crs_factors, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_crsfactors.rds"))
 
 
 ## Family history ----
@@ -228,11 +285,11 @@ fhx <- PREVENTAD_raw$demographics %>%
   select(CONP_ID, father_dx_ad_dementia:other_paternal_family_members_AD) %>%
   rowwise() %>%
   mutate(
-    # number of first degree relatives with AD
+    # Number of first degree relatives with AD
     FDR_AD = sum(father_dx_ad_dementia, 
                  mother_dx_ad_dementia, 
                  sibling_dx_ad_dementia_count, na.rm=TRUE),
-    # recode NAs to 0 in "other" columns
+    # Recode NAs to 0 in "other" columns
     other_family_members_AD = if_else(is.na(other_family_members_AD), 
                                       0, 
                                       other_family_members_AD),
@@ -242,11 +299,11 @@ fhx <- PREVENTAD_raw$demographics %>%
     other_paternal_family_members_AD = if_else(is.na(other_paternal_family_members_AD), 
                                                0, 
                                                other_paternal_family_members_AD),
-    # binary y/n (1/0) extended relatives with AD
+    # Binary y/n (1/0) extended relatives with AD
     ER_AD = if_else(other_family_members_AD > 0, 1, 0),
-    # binary 1 or more FDR with AD
+    # Binary 1 or more FDR with AD
     FDRAD_1ormore = if_else(FDR_AD == 1, 1, 2),
-    # final family history variable
+    # Final family history variable
     family_history = case_when(
       FDRAD_1ormore == 1 & ER_AD == 0 ~ 1,
       FDRAD_1ormore == 1 & ER_AD == 1 ~ 2,
@@ -270,108 +327,48 @@ fhx <- PREVENTAD_raw$demographics %>%
 saveRDS(fhx, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_fhx.rds"))
 
 
-## Lifestyle ----
-lifestyle <- criteria_met %>%
-  select(CONP_ID) %>%
-  left_join(
-    # smoking
-    (PREVENTAD_raw$questionnaire %>%
-       select(CONP_ID, smoking_present) %>%
-       filter(!is.na(smoking_present)) %>%
-       group_by(CONP_ID) %>%
-       slice(1)
-     ),
-    by="CONP_ID") %>%
-  # epoch score (cognitive activity)
-  left_join(
-    (PREVENTAD_raw$questionnaire %>%
-       select(CONP_ID, epoch_score_currently) %>%
-       filter(!is.na(epoch_score_currently)) %>%
-       group_by(CONP_ID) %>%
-       slice(1)),
-    by="CONP_ID") %>%
-  # physical activity
-  left_join(
-    (PREVENTAD_raw$questionnaire %>%
-       select(CONP_ID, starts_with("exer_curr_")) %>%
-       select(!matches("category")) %>%
-       filter(!is.na(exer_curr_act1_intensity)) %>%
-       group_by(CONP_ID) %>%
-       slice(1) %>%
-       # Convert character columns to numeric before recoding
-       mutate(across(starts_with("exer_curr_") & where(is.character), as.numeric)) %>%
-       # Recode exercise NAs to 0 for participants who have earlier activities
-       rowwise() %>%
-       mutate(
-         # For act2: if act1 has data and act2 is NA, set act2 to 0
-         across(starts_with("exer_curr_act2_"),
-                ~if_else(!is.na(exer_curr_act1_intensity) & is.na(.), 0, .)),
-         # For act3: if act1 has data and act3 is NA, set act3 to 0
-         across(starts_with("exer_curr_act3_"),
-                ~if_else(!is.na(exer_curr_act1_intensity) & is.na(.), 0, .)),
-         # For act4: if act1 has data and act4 is NA, set act4 to 0
-         across(starts_with("exer_curr_act4_"),
-                ~if_else(!is.na(exer_curr_act1_intensity) & is.na(.), 0, .)),
-         # For act5: if act1 has data and act5 is NA, set act5 to 0
-         across(starts_with("exer_curr_act5_"),
-                ~if_else(!is.na(exer_curr_act1_intensity) & is.na(.), 0, .))
-       ) %>%
-       ungroup()
-     ),
-    by="CONP_ID") %>%
-  # social activity
-  left_join(
-    (PREVENTAD_raw$questionnaire %>%
-       select(CONP_ID, starts_with("social_life_")) %>%
-       group_by(CONP_ID) %>%
-       filter_at(vars(starts_with("social_life_")), any_vars(!is.na(.))) %>%
-       slice(1)
-     ),
-    by="CONP_ID")
-  
-# Save dataset
-saveRDS(lifestyle, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_lifestyle.rds"))
 
-
-# MISSING DATA IMPUTATION -------------------------------------------------
-# Names of variables with any NA
-clinical_vars_to_imp <- names(clinical)[sapply(clinical, anyNA)]
-
-lifestyle_vars_to_imp <- names(lifestyle)[sapply(lifestyle, anyNA)]
-
-# Remove act2-5 exercise variables from imputation list
-lifestyle_vars_to_imp <- lifestyle_vars_to_imp[!grepl("exer_curr_act[2-5]", lifestyle_vars_to_imp)]
-
-# Subset only the variables with any NA and recode to numeric or factor for missForest
-clinical_imp <- clinical %>%
-  select(all_of(clinical_vars_to_imp)) %>%
-  mutate_at(c("head_injury_hospitalized", "head_injury_severe",
-              "diagnosed_impairment", "subjective_hearing_impairment"), as.factor)
-
-lifestyle_imp <- lifestyle %>%
-  select(all_of(lifestyle_vars_to_imp)) %>%
+# MISSING CRS FACTORS IMPUTATION ------------------------------------------
+# Prepare data for missForest
+crs_factors_mf <- crs_factors %>%
+  # Remove act2-5 exercise variables 
+  select(-matches("exer_curr_act[2-5]")) %>%
+  # Convert binary/categorical variables to factors
   mutate(smoking_present = as.factor(smoking_present)) %>%
   mutate(exer_curr_act1_intensity = as.factor(exer_curr_act1_intensity)) %>%
-  mutate(across(starts_with("social_"), as.factor)) %>%
-  as.data.frame()  # Convert to data.frame for missForest
+  # mutate(exer_curr_act1_weeks = as.factor(exer_curr_act1_weeks)) %>%
+  mutate(social_life_frequency_phone_calls = as.factor(social_life_frequency_phone_calls)) %>%
+  mutate(across(c(starts_with("past_"), starts_with("treatment_"), starts_with("head_"),
+                  ends_with("_impairment"), starts_with("social_life_frequency_visit"), 
+                  starts_with("medusage")), 
+                as.factor)) %>%
+  select(-CONP_ID)
+
+# Set CONP_ID as rownames to keep linkage
+rownames(crs_factors_mf) <- crs_factors$CONP_ID
 
 # Run missForest imputation
-clinical_imp_mf <- missForest(clinical_imp, verbose=TRUE, maxiter=10, ntree=100)
-clinical_imp_mf_dat <- cbind(clinical_imp_mf$ximp, CONP_ID=clinical$CONP_ID) %>%
-  relocate(CONP_ID) 
+crs_mf <- missForest(crs_factors_mf, verbose=TRUE, maxiter=10, ntree=100)
+
+# Extract imputed data
+crs_factors_imputed <- crs_mf$ximp %>%
+  rownames_to_column("CONP_ID")
+
+# Get original act2-5 columns 
+act2_5_original <- crs_factors %>%
+  select(CONP_ID, matches("exer_curr_act[2-5]"))
+
+# Add back act2-5 exercise columns with original values where available, 0 where missing
+crs_factors_imputed <- crs_factors_imputed %>%
+  left_join(act2_5_original, by = "CONP_ID") %>%
+  # Replace NAs with 0 for act2-5 columns
+  mutate(across(matches("exer_curr_act[2-5]"), ~replace_na(., 0)))
 
 lifestyle_imp_mf <- missForest(lifestyle_imp, verbose=TRUE, maxiter=10, ntree=100)
 lifestyle_imp_mf_dat <- cbind(lifestyle_imp_mf$ximp, CONP_ID=lifestyle$CONP_ID) %>%
   relocate(CONP_ID) %>%
   mutate(across(starts_with("social_"), as.numeric))
 
-# Merge imputed values back into datasets
-clinical_imp_dat <- clinical
-clinical_imp_dat[names(clinical_imp_mf_dat)] <- clinical_imp_mf_dat
-lifestyle_imp_dat <- lifestyle
-lifestyle_imp_dat[names(lifestyle_imp_mf_dat)] <- lifestyle_imp_mf_dat
-
-# Save imputed datasets
-saveRDS(clinical_imp_dat, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_clinical_imputed.rds"))
-saveRDS(lifestyle_imp_dat, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_lifestyle_imputed.rds"))
+# Save imputed dataset
+saveRDS(crs_factors_imputed, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_crsfactors_imputed.rds"))
 
