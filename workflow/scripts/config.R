@@ -40,7 +40,4 @@ AIM1_OUTPUT_PATH <- list(
 
 DATA_INTERMEDIATE_PATH <- here("data", "intermediate")
 
-DATA_CLEANED_PATH <- list(
-  cleaned = here("data", "cleaned"),
-  filtered = here("data", "cleaned", "filtered")
-)
+DATA_CLEANED_PATH <- here("data", "cleaned")
