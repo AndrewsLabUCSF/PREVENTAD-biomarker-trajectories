@@ -390,7 +390,9 @@ saveRDS(crs_factors_imputed, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_crsfac
 
 # MCI PROGRESSION ---------------------------------------------------------
 mci <- PREVENTAD_raw$MCI %>%
-  filter(CONP_ID %in% criteria_met$CONP_ID)
+  filter(CONP_ID %in% criteria_met$CONP_ID) %>%
+  rename(age = Candidate_Age) %>%
+  mutate(age = age/12)
 
 # Save MCI dataset
 saveRDS(mci, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_MCI.rds"))
