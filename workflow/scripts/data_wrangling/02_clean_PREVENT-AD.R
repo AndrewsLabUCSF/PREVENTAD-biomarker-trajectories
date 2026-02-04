@@ -50,6 +50,8 @@ criteria_met <- biomarkers %>%
   filter(has_2plus_visits) %>%
   filter(CONP_ID %in% gwas$CONP_ID)
 
+cat("Participants meeting criteria:", nrow(criteria_met), "\n")
+
 
 # RISK COMPONENT SPECIFIC DATASETS -----------------------------------------
 ## Steps:
@@ -63,7 +65,7 @@ biomarkers_filtered <- biomarkers %>%
   filter(CONP_ID %in% criteria_met$CONP_ID)
 
 # Save dataset
-saveRDS(biomarkers_filtered, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_biomarkers.rds"))
+saveRDS(biomarkers_filtered, file.path(DATA_INTERMEDIATE_PATH$base, "PREVENTAD_biomarkers.rds"))
 
 
 ## Genetics ----
@@ -87,8 +89,8 @@ apoe_dat <- PREVENTAD_raw$genetics %>%
 gwas_filtered <- gwas %>% filter(CONP_ID %in% criteria_met$CONP_ID)
 
 # Save datasets
-saveRDS(apoe_dat, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_APOE.rds"))
-saveRDS(gwas_filtered, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_GWAS.rds"))
+saveRDS(apoe_dat, file.path(DATA_INTERMEDIATE_PATH$base, "PREVENTAD_APOE.rds"))
+saveRDS(gwas_filtered, file.path(DATA_INTERMEDIATE_PATH$base, "PREVENTAD_GWAS.rds"))
 
 
 ## CRS factors ----
@@ -102,9 +104,9 @@ crs_factors <- PREVENTAD_raw$demographics %>%
     (PREVENTAD_raw$bp_pulse_weight %>% 
        group_by(CONP_ID) %>%
        slice(1) %>%
-       select(CONP_ID, age=Candidate_Age, Systolic_blood_pressure, Diastolic_blood_pressure) %>%
-       mutate(age = age/12)
-     ), 
+       select(CONP_ID, Age=Candidate_Age, Systolic_blood_pressure, Diastolic_blood_pressure) %>%
+       mutate(Age = Age/12)
+    ), 
     by="CONP_ID") %>%
   left_join( 
     (PREVENTAD_raw$bp_pulse_weight %>%  # Get first non-NA weight 
@@ -112,7 +114,7 @@ crs_factors <- PREVENTAD_raw$demographics %>%
        filter(!is.na(Weight)) %>%
        slice(1) %>%
        select(CONP_ID, Weight)
-     ),
+    ),
     by="CONP_ID") %>%
   # Lab; get first non-NA lab measurements
   left_join(
@@ -121,7 +123,7 @@ crs_factors <- PREVENTAD_raw$demographics %>%
        group_by(CONP_ID) %>%
        slice(1) %>%
        select(CONP_ID, total_cholesterol_value)
-     ),
+    ),
     by="CONP_ID") %>%
   left_join(
     (PREVENTAD_raw$lab %>%
@@ -129,7 +131,7 @@ crs_factors <- PREVENTAD_raw$demographics %>%
        group_by(CONP_ID) %>%
        slice(1) %>%
        select(CONP_ID, LDL_value)
-     ),
+    ),
     by="CONP_ID") %>%
   left_join(
     (PREVENTAD_raw$lab %>%
@@ -137,14 +139,14 @@ crs_factors <- PREVENTAD_raw$demographics %>%
        filter(!is.na(hba1c_value)) %>%
        group_by(CONP_ID) %>%
        slice(1)
-     ),
+    ),
     by="CONP_ID") %>%
   # Medical history
   left_join(
     (PREVENTAD_raw$medical_history %>%
        select(CONP_ID, past_depression, past_atrial_fibrillation, treatment_diabetes,
               treatment_hypertension, treatment_hyperlipidemia) 
-     ),
+    ),
     by="CONP_ID") %>%
   # Head injury variables
   left_join(
@@ -152,7 +154,7 @@ crs_factors <- PREVENTAD_raw$demographics %>%
        select(CONP_ID, head_injury_hospitalized, head_injury_severe) %>%
        filter_at(vars(head_injury_severe, head_injury_hospitalized), 
                  any_vars(!is.na(.)))
-     ),
+    ),
     by="CONP_ID") %>%
   # Geriatric depression scale
   left_join(
@@ -178,7 +180,7 @@ crs_factors <- PREVENTAD_raw$demographics %>%
        select(CONP_ID, diagnosed_impairment, subjective_hearing_impairment) %>%
        group_by(CONP_ID) %>%
        slice(1)
-     ),
+    ),
     by="CONP_ID") %>%
   # Smoking
   left_join(
@@ -235,6 +237,7 @@ crs_factors <- PREVENTAD_raw$demographics %>%
        slice(1)
     ),
     by="CONP_ID")
+
 
 ### Medication ----
 # Only need to look for antihypertensives, antidiabetics, antihyperlipidemic, and antidepressants
@@ -310,7 +313,7 @@ fhx <- PREVENTAD_raw$demographics %>%
       FDRAD_1ormore == 2 & ER_AD == 0 ~ 3,
       FDRAD_1ormore == 2 & ER_AD == 1 ~ 4,
       TRUE ~ NA
-      ),
+    ),
     family_history = factor(family_history,
                             levels=c(1, 2, 3, 4),
                             labels=c("1 FDR", "1 FDR + ext",
@@ -324,7 +327,7 @@ fhx <- PREVENTAD_raw$demographics %>%
   relocate(family_history, .after=ER_AD)
 
 # Save dataset
-saveRDS(fhx, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_fhx.rds"))
+saveRDS(fhx, file.path(DATA_INTERMEDIATE_PATH$base, "PREVENTAD_fhx.rds"))
 
 
 
@@ -349,12 +352,28 @@ rownames(crs_factors_mf) <- crs_factors$CONP_ID
 
 # Run missForest imputation
 crs_mf <- missForest(crs_factors_mf, verbose=TRUE, maxiter=10, ntree=100)
+cat("Imputation complete. OOB error:", crs_mf$OOBerror, "\n")
 
 # Extract imputed data
 crs_factors_imputed <- crs_mf$ximp %>%
-  rownames_to_column("CONP_ID")
+  rownames_to_column("CONP_ID") %>%
+  # Convert factor variables back to numeric for downstream use
+  mutate(
+    across(c(starts_with("past_"), starts_with("treatment_"), starts_with("head_"),
+             starts_with("medusage_")),
+           ~as.numeric(as.character(.))),
+    # Keep diagnosed_impairment and subjective_hearing_impairment as numeric
+    across(ends_with("_impairment"), ~as.numeric(as.character(.))),
+    # Convert social life frequency variables back to numeric
+    across(starts_with("social_life_frequency"), ~as.numeric(as.character(.))),
+    # Keep smoking_present and exercise variables as numeric
+    smoking_present = as.numeric(as.character(smoking_present)),
+    across(contains("_intensity"), ~as.numeric(as.character(.))),
+    across(contains("_weeks"), ~as.numeric(as.character(.))),
+    across(contains("_hours"), ~as.numeric(as.character(.)))
+  )
 
-# Get original act2-5 columns 
+# Get original act2-5 columns
 act2_5_original <- crs_factors %>%
   select(CONP_ID, matches("exer_curr_act[2-5]"))
 
@@ -363,11 +382,6 @@ crs_factors_imputed <- crs_factors_imputed %>%
   left_join(act2_5_original, by = "CONP_ID") %>%
   # Replace NAs with 0 for act2-5 columns
   mutate(across(matches("exer_curr_act[2-5]"), ~replace_na(., 0)))
-
-lifestyle_imp_mf <- missForest(lifestyle_imp, verbose=TRUE, maxiter=10, ntree=100)
-lifestyle_imp_mf_dat <- cbind(lifestyle_imp_mf$ximp, CONP_ID=lifestyle$CONP_ID) %>%
-  relocate(CONP_ID) %>%
-  mutate(across(starts_with("social_"), as.numeric))
 
 # Save imputed dataset
 saveRDS(crs_factors_imputed, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_crsfactors_imputed.rds"))
