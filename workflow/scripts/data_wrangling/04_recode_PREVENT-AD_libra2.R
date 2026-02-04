@@ -5,24 +5,14 @@
 source('workflow/scripts/config.R')
 source(CRS_FN)
 
-clinical_raw <- readRDS(file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_clinical_imp_raw.rds"))
-lifestyle_raw <- readRDS(file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_lifestyle_imp_raw.rds"))
-meduse <- readRDS(file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_meduse.rds"))
+# Load imputed CRS factors (contains all clinical, lifestyle, and medication data)
+crs_factors <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_crsfactors_imputed.rds"))
 
 
 # RECODING ----------------------------------------------------------------
-dat_libra <- clinical_raw %>%
-  # select(CONP_ID, Systolic_blood_pressure, Diastolic_blood_pressure, total_cholesterol_value, 
-  #        LDL_value, Height, Weight, hba1c_value, treatment_diabetes, treatment_hypertension,
-  #        treatment_hyperlipidemia, past_depression, diagnosed_impairment) %>%
-  left_join((lifestyle_raw %>%
-               select(CONP_ID, smoking_present, epoch_score_currently, pittsburgh_total_score,
-                      social_life_frequency_activities:social_life_frequency_phone_calls,
-                      gds_score)),
-            by="CONP_ID") %>%
-  left_join(meduse, by="CONP_ID") %>%
+dat_libra <- crs_factors %>%
   mutate(
-    Age = Candidate_Age/12,
+    # Age = age,
     # Sleep disturbances:
     # 1 == highest tertile
     Sleep_disturbances_holder = ntile(pittsburgh_total_score, 3),
@@ -62,15 +52,15 @@ dat_libra <- clinical_raw %>%
       (Age >= 60 & Age < 70) & hba1c_value <= 0.075 & treatment_diabetes == 0 ~ 0,
       Age >= 70 & treatment_diabetes == 0 & hba1c_value <= 0.07 ~ 0,
       is.na(treatment_diabetes) & is.na(medusage_antidiabetic) & is.na(hba1c_value) ~ NA,
-      TRUE ~ 1) %>% factor(),
+      TRUE ~ 1),
     
     # Depression
     # 1 == yes
     Depression = case_when(past_depression == 1 ~ 1,
                            medusage_antidepressants == 1 ~ 1,
-                           gds_score >= 5 ~ 1, 
+                           gds_score >= 5 ~ 1,
                            past_depression == 0 & medusage_antidepressants == 0 ~ 0,
-                           TRUE ~ NA) %>% factor(),
+                           TRUE ~ NA),
     
     Smoking = if_else(as.numeric(smoking_present) >= 3, 1, 0),
     Cognitive_activity_holder = ntile(epoch_score_currently, 3),
@@ -100,16 +90,17 @@ dat_libra <- clinical_raw %>%
 
 
 ## Recoding exercise columns
-exercise_libra <- lifestyle_raw %>%
+exercise_libra <- crs_factors %>%
   select(CONP_ID, exer_curr_act1_intensity:exer_curr_act5_hours) %>%
   mutate(
     moderate_minutes_week = 0,
     vigorous_minutes_week = 0
   ) %>%
+  # Ensure all exercise variables are numeric (should already be from crs_factors_imputed)
   mutate(
-    across(contains("_intensity"), ~ as.numeric(as.character(.))),
-    across(contains("_days"), ~ as.numeric(as.character(.))),
-    across(contains("_hours"), ~ as.numeric(as.character(.)))
+    across(contains("_intensity"), ~ as.numeric(.)),
+    across(contains("_weeks"), ~ as.numeric(.)),
+    across(contains("_hours"), ~ as.numeric(.))
   ) %>%
   rowwise() %>%
   mutate(
@@ -118,18 +109,18 @@ exercise_libra <- lifestyle_raw %>%
   ungroup()
 
 # Loop through activities to calculate moderate and vigorous minutes
-for(i in 1:5) {  
+for(i in 1:5) {
   intensity_col <- paste0("exer_curr_act", i, "_intensity")
-  days_col <- paste0("exer_curr_act", i, "_days")
+  weeks_col <- paste0("exer_curr_act", i, "_weeks")
   hours_col <- paste0("exer_curr_act", i, "_hours")
   
   exercise_libra <- exercise_libra %>%
     mutate(
       # Calculate minutes per week for this activity
       activity_minutes = case_when(
-        !is.na(.data[[intensity_col]]) & 
-          !is.na(.data[[days_col]]) & 
-          !is.na(.data[[hours_col]]) ~ .data[[days_col]] * .data[[hours_col]] * 60,
+        !is.na(.data[[intensity_col]]) &
+          !is.na(.data[[weeks_col]]) &
+          !is.na(.data[[hours_col]]) ~ .data[[weeks_col]] * .data[[hours_col]] * 60,
         TRUE ~ 0
       ),
       
@@ -176,6 +167,6 @@ dat_libra_scored <- dat_libra %>%
 
 # Save
 saveRDS(dat_libra, 
-        file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_libra_imp_dat.rds"))
+        file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_libra2.rds"))
 saveRDS(dat_libra_scored, 
-        file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_libra_scored_dat.rds"))
+        file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_libra2_scored.rds"))
