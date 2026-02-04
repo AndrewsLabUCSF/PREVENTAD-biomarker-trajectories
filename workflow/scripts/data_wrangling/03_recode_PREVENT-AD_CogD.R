@@ -5,18 +5,14 @@
 source('workflow/scripts/config.R')
 source(CRS_FN)
 
-clinical_raw <- readRDS(file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_clinical_imp_raw.rds"))
-lifestyle_raw <- readRDS(file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_lifestyle_imp_raw.rds"))
-meduse <- readRDS(file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_meduse.rds"))
+# Load imputed CRS factors (contains all clinical, lifestyle, and medication data)
+crs_factors <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_crsfactors_imputed.rds"))
 
 ## RECODING ---------------------------------------------------------------
-clinical_cogd <- clinical_raw %>%
-  left_join(meduse, by="CONP_ID") %>%
-  left_join((lifestyle_raw %>% select(CONP_ID, gds_score, epworth_score, pittsburgh_total_score)),
-            by="CONP_ID") %>%
+clinical_cogd <- crs_factors %>%
   mutate(
-    Sex = if_else(Sex == "Female", 0, 1) %>% factor(), # female == 0, male == 1
-    Age = Candidate_Age/12,
+    #Sex = if_else(Sex == "Female", 0, 1), # female == 0, male == 1
+    # Age = age,
     Education_level = case_when(
       Education_years > 11 ~ "High",
       Education_years > 8 & Education_years <= 11 ~ "Middle",
@@ -29,7 +25,7 @@ clinical_cogd <- clinical_raw %>%
       Systolic_blood_pressure > 129 ~ 1,
       Diastolic_blood_pressure >= 80 ~ 1,
       medusage_antihypertensive == 0 & !is.na(Systolic_blood_pressure) & !is.na(Diastolic_blood_pressure) ~ 0,
-      TRUE ~ NA) %>% factor(),
+      TRUE ~ NA),
     
     BMI = Weight/(Height/100)^2,
     BMI_category = case_when(
@@ -40,12 +36,12 @@ clinical_cogd <- clinical_raw %>%
       TRUE ~ NA) %>% factor(),
     
     # High cholesterol risk factor present == 1
-    High_cholesterol = if_else(total_cholesterol_value > 6.5, 1, 0) %>% factor(), 
+    High_cholesterol = if_else(total_cholesterol_value > 6.5, 1, 0),
     
     # Insomnia risk factor present == 1
     Insomnia = if_else(
-      epworth_score >= 10 & pittsburgh_total_score > 5, 1, 0
-      ) %>% factor(),
+      pittsburgh_total_score > 5, 1, 0
+    ),
     
     # Depression risk factor present == 1
     Depression = case_when(
@@ -53,8 +49,8 @@ clinical_cogd <- clinical_raw %>%
       medusage_antidepressants == 1 ~ 1,
       gds_score >= 5 ~ 1,
       past_depression == 0 & medusage_antidepressants == 0 ~ 0,
-      TRUE ~ NA) %>% factor(),
-    Atrial_fibrillation = past_atrial_fibrillation %>% factor(),
+      TRUE ~ NA),
+    Atrial_fibrillation = past_atrial_fibrillation,
     
     # Diabetes risk factor present == 1
     Diabetes = case_when(
@@ -64,10 +60,11 @@ clinical_cogd <- clinical_raw %>%
       (Age >= 60 & Age < 70) & hba1c_value <= 0.075 & treatment_diabetes == 0 ~ 0,
       Age >= 70 & treatment_diabetes == 0 & hba1c_value <= 0.07 ~ 0,
       is.na(treatment_diabetes) & is.na(medusage_antidiabetic) & is.na(hba1c_value) ~ NA,
-      TRUE ~ 1) %>% factor(),
+      TRUE ~ 1),
     
+    # TBI risk factor present == 1
     TBI = if_else(head_injury_hospitalized == 1 | head_injury_severe == 1,
-                  1, 0) %>% factor()) %>%
+                  1, 0)) %>%
   relocate(Age, .after=Sex) %>%
   relocate(Education_level, .after=Education_years) %>%
   relocate(BMI, .after=Weight) %>%
@@ -77,15 +74,15 @@ clinical_cogd <- clinical_raw %>%
   relocate(Depression, .after=past_depression) %>%
   relocate(Atrial_fibrillation, .after=past_atrial_fibrillation) %>%
   relocate(Diabetes, .after=treatment_diabetes) %>%
-  select(-c(Candidate_Age, Systolic_blood_pressure, Diastolic_blood_pressure,
+  select(-c(Systolic_blood_pressure, Diastolic_blood_pressure,
             Height, Weight, total_cholesterol_value, past_depression,
-            past_atrial_fibrillation, hba1c_value, head_injury_hospitalized, 
+            past_atrial_fibrillation, hba1c_value, head_injury_hospitalized,
             head_injury_severe, starts_with("medusage_"), starts_with("treatment_"),
-            ends_with("medication"), diagnosed_impairment, epworth_score,
+            diagnosed_impairment, subjective_hearing_impairment,
             gds_score, pittsburgh_total_score))
 
 
-lifestyle_cogd <- lifestyle_raw %>%
+lifestyle_cogd <- crs_factors %>%
   # smoking: 2 == current, 1 == former, 0 == non smoker
   mutate(Smoking = case_when(smoking_present == 4 ~ 2,
                              smoking_present == 3 ~ 2,
@@ -106,27 +103,28 @@ lifestyle_exercise_cogd <- lifestyle_cogd %>%
     light_minutes_week = 0,
     moderate_minutes_week = 0,
     heavy_minutes_week = 0) %>%
-  mutate(across(contains("_intensity"), ~ as.numeric(as.character(.))),
-         across(contains("_days"), ~ as.numeric(as.character(.))),
-         across(contains("_hours"), ~ as.numeric(as.character(.)))) %>%
+  # Ensure all exercise variables are numeric (should already be from crs_factors_imputed)
+  mutate(across(contains("_intensity"), ~ as.numeric(.)),
+         across(contains("_weeks"), ~ as.numeric(.)),
+         across(contains("_hours"), ~ as.numeric(.))) %>%
   rowwise() %>%
   mutate(
     has_any_exercise_data = any(!is.na(c_across(contains("exer_curr_act"))))
   ) %>%
   ungroup()
 
-for(i in 1:5) {  
+for(i in 1:5) {
   intensity_col <- paste0("exer_curr_act", i, "_intensity")
-  days_col <- paste0("exer_curr_act", i, "_days")
+  weeks_col <- paste0("exer_curr_act", i, "_weeks")
   hours_col <- paste0("exer_curr_act", i, "_hours")
   
   lifestyle_exercise_cogd <- lifestyle_exercise_cogd %>%
     mutate(
       # Only calculate if ALL three values for this activity are present
       activity_minutes = case_when(
-        !is.na(.data[[intensity_col]]) & 
-          !is.na(.data[[days_col]]) & 
-          !is.na(.data[[hours_col]]) ~ .data[[days_col]] * .data[[hours_col]] * 60,
+        !is.na(.data[[intensity_col]]) &
+          !is.na(.data[[weeks_col]]) &
+          !is.na(.data[[hours_col]]) ~ .data[[weeks_col]] * .data[[hours_col]] * 60,
         TRUE ~ 0),
       
       light_minutes_week = light_minutes_week + 
@@ -170,6 +168,6 @@ dat_cogd_scored <- dat_cogd %>%
 
 # Save
 saveRDS(dat_cogd, 
-        file.path(DATA_OUTPUT_PATHS$data$intermediate, "PREVENTAD_cogd_dat.rds"))
+        file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_cogd.rds"))
 saveRDS(dat_cogd_scored, 
-        file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_cogd_scored_dat.rds"))
+        file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_cogd_scored.rds"))
