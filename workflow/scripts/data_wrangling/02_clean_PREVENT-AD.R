@@ -386,3 +386,11 @@ crs_factors_imputed <- crs_factors_imputed %>%
 # Save imputed dataset
 saveRDS(crs_factors_imputed, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_crsfactors_imputed.rds"))
 
+
+
+# MCI PROGRESSION ---------------------------------------------------------
+mci <- PREVENTAD_raw$MCI %>%
+  filter(CONP_ID %in% criteria_met$CONP_ID)
+
+# Save MCI dataset
+saveRDS(mci, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_MCI.rds"))
