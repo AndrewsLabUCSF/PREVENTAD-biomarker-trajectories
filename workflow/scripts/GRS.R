@@ -6,8 +6,7 @@ library(readxl)
 source('workflow/scripts/config.R')
 
 # Load datasets
-gwas_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_dat.rds"))$GWAS
-apoe <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_apoe.rds"))
+gwas_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_GWAS.rds"))
 bellenguez_results <- read_xlsx("data/raw/41588_2022_1024_MOESM4_ESM.xlsx", 
                                 sheet="Supplementary Table 32", skip=2)
 
@@ -40,11 +39,11 @@ calculate_grs <- function(geno_matrix, weights_df) {
 # Convert to matrix 
 id_cols <- c("CONP_ID", "CONP_CandID") 
 geno_matrix <- as.matrix(gwas_raw[, !names(gwas_raw) %in% id_cols])
-mode(geno_imp_matrix) <- "integer"
+mode(geno_matrix) <- "integer"
 
 # Calculate GRS
 GRS <- calculate_grs(geno_matrix, GRSweights) 
 gwas <- cbind(gwas_raw, GRS) %>%
   relocate(GRS, .after=CONP_CandID)
 
-saveRDS(gwas, file.path(DATA_OUTPUT_PATHS$data$cleaned, "PREVENTAD_GRS.rds"))
+saveRDS(gwas, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_GRS.rds"))
