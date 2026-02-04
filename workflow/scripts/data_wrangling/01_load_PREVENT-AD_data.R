@@ -22,5 +22,7 @@ names(PREVENTAD_raw) <- c("auditory", "bp_pulse_weight", "CDR_FU", "diagnosis",
                           "questionnaire")
 
 # Save extracted data
+output_file_name <- "PREVENTAD_raw.rds"
 saveRDS(PREVENTAD_raw, 
-        file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_raw.rds"))
+        file.path(DATA_INTERMEDIATE_PATH, output_file_name))
+cat("Raw PREVENT-AD data loaded into:", output_file_name)
