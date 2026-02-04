@@ -1,7 +1,6 @@
 
 # CogDrisk ----------------------------------------------------------------
-## Calculate CogDrisk score
-##  Inputs:
+# Calculate CogDrisk score
 
 calculate_cogdrisk <- function(df, 
                                age_var="Age",
@@ -58,23 +57,21 @@ calculate_cogdrisk <- function(df,
     sex <- df[[sex_var]]
     
     agesex_points <- case_when(
-      # Female (0)
-      sex == 0 & age < 65 ~ 0,
-      sex == 0 & age >= 65 & age < 69 ~ 5,
-      sex == 0 & age >= 70 & age < 74 ~ 7, 
-      sex == 0 & age >= 75 & age < 79 ~ 13,
-      sex == 0 & age >= 80 & age < 84 ~ 16,
-      sex == 0 & age >= 85 & age < 89 ~ 19,
-      sex == 0 & age >= 90 ~ 23,
-      
-      # Male (1)
-      sex == 1 & age < 65 ~ 0,
-      sex == 1 & age >= 65 & age < 69 ~ 5,
-      sex == 1 & age >= 70 & age < 74 ~ 8, 
-      sex == 1 & age >= 75 & age < 79 ~ 12,
-      sex == 1 & age >= 80 & age < 84 ~ 17,
-      sex == 1 & age >= 85 & age < 89 ~ 19,
-      sex == 1 & age >= 90 ~ 23,
+      sex == "Female" & age < 65 ~ 0,
+      sex == "Female" & age >= 65 & age < 69 ~ 5,
+      sex == "Female" & age >= 70 & age < 74 ~ 7, 
+      sex == "Female" & age >= 75 & age < 79 ~ 13,
+      sex == "Female" & age >= 80 & age < 84 ~ 16,
+      sex == "Female" & age >= 85 & age < 89 ~ 19,
+      sex == "Female" & age >= 90 ~ 23,
+
+      sex == "Male" & age < 65 ~ 0,
+      sex == "Male" & age >= 65 & age < 69 ~ 5,
+      sex == "Male" & age >= 70 & age < 74 ~ 8, 
+      sex == "Male" & age >= 75 & age < 79 ~ 12,
+      sex == "Male" & age >= 80 & age < 84 ~ 17,
+      sex == "Male" & age >= 85 & age < 89 ~ 19,
+      sex == "Male" & age >= 90 ~ 23,
       
       TRUE ~ 0
     )
@@ -127,8 +124,8 @@ calculate_cogdrisk <- function(df,
   if (diabetes_var %in% names(df)) {
     diabetes <- df[[diabetes_var]]
     diabetes_points <- case_when(
-      sex == 0 & diabetes == 1 ~ 3,
-      sex == 1 & diabetes == 1 ~ 2,
+      sex == "Female" & diabetes == 1 ~ 3,
+      sex == "Male" & diabetes == 1 ~ 2,
       diabetes == 0 ~ 0,
       TRUE ~ 0
     )
@@ -223,9 +220,9 @@ calculate_cogdrisk <- function(df,
   if (smoking_var %in% names(df)) {
     smoking <- df[[smoking_var]]
     smoking_points <- case_when(
-      smoking == 2 ~ 1,
-      smoking == 1 ~ 0,
-      smoking == 0 ~ 0,
+      smoking == "Current" ~ 1,
+      smoking == "Former" ~ 0,
+      smoking == "Never" ~ 0,
       TRUE ~ 0
     )
     points <- points + smoking_points
@@ -237,11 +234,6 @@ calculate_cogdrisk <- function(df,
   return(points)
 
 }
-
-# test <- data_cogdrisk %>% 
-#   mutate(score = calculate_cogdrisk(data_cogdrisk)) %>%
-#   relocate(score, .after=CONP_ID)
-
 
 
 # LIBRA2 ------------------------------------------------------------------
@@ -548,6 +540,3 @@ calculate_libra <- function(df,
   
 }
 
-# test <- dat_libra %>%
-#   mutate(score = calculate_libra(dat_libra)) %>%
-#   relocate(score, .after=CONP_ID)
