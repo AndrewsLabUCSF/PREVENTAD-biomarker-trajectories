@@ -1,0 +1,150 @@
+---
+title: "EDA: Distributions"
+format: html
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warnings = FALSE)
+knitr::opts_knit$set(root.dir = here::here())
+```
+
+```{r setting}
+# Load packages and data
+library(broom)
+library(car)
+library(patchwork)
+
+source('workflow/scripts/config.R')
+
+biomarkers <- readRDS(file.path(DATA_INTERMEDIATE_PATH, 
+                                "PREVENTAD_biomarkers_filtered.rds"))
+predictors <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_predictors.rds"))
+baseline_dat <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_baseline.rds"))
+lastvisit_dat <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_lastvisit.rds"))
+all_dat <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_longitudinal.rds"))
+```
+
+
+# Predictor distributions
+```{r predictor-dist}
+# Categorical
+apoe_hist <- predictors %>%
+  ggplot(aes(x = apoe)) +
+  geom_bar(stat="count", fill="steelblue", alpha=0.7) + 
+  labs(title = "APOE Status", 
+       x = "APOE Status",
+       y = "Count")
+
+fhx_hist <- predictors %>%
+  ggplot(aes(x = family_history)) +
+  geom_bar(stat="count", fill="steelblue", alpha=0.7) + 
+  labs(title = "Family History", 
+       x = "Family History",
+       y = "Count")
+
+cat_hist <- apoe_hist | fhx_hist
+cat_hist <- cat_hist + plot_annotation(title = "PREVENT-AD Categorical Predictors")
+cat_hist
+
+# Continuous
+cogd_plot <- predictors %>%
+  ggplot(aes(x = score_cogd)) +
+  geom_histogram(aes(y = ..density..), binwidth=2, fill="steelblue", alpha=0.7) +
+  geom_density(col="red") +
+  labs(title = "CogDrisk Scores",
+       x = "CogDrisk Score",
+       y = "Density")
+
+libra2_plot <- predictors %>%
+  ggplot(aes(x = score_libra2)) +
+  geom_histogram(aes(y = ..density..), binwidth=2, fill="steelblue", alpha=0.7) +
+  geom_density(col="red") +
+  labs(title = "LIBRA2 Scores",
+       x = "LIBRA2 Score",
+       y = "Density")
+
+grs_plot <- predictors %>%
+  ggplot(aes(x = GRS)) +
+  geom_histogram(aes(y = ..density..), bins=20, fill="steelblue", alpha=0.7) +
+  geom_density(col="red") +
+  labs(title = "Genetic Risk Scores",
+       subtitle = "(GRS)",
+       x = "GRS",
+       y = "Density")
+
+cont_plot <- cogd_plot | libra2_plot | grs_plot
+cont_plot <- cont_plot + plot_annotation(title = "PREVENT-AD Continuous Predictors")
+cont_plot
+
+# Save plots
+# ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_predictors_categorical_hist.png"), cat_hist, width = 12, height = 8, dpi = 300)
+# ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_predictors_continuous_hist.png"), cont_plot, width = 12, height = 8, dpi = 300)
+```
+
+
+# Biomarker distributions 
+```{r biomarker-dist}
+biomarkers_longer <- all_dat %>%
+  select(CONP_ID, Visit_label, all_of(BIOMARKERS)) %>%
+  pivot_longer(
+    cols = all_of(BIOMARKERS),
+    names_to = "biomarker",
+    values_to = "measure"
+  )
+
+biomarker_plot <- biomarkers_longer %>%
+  ggplot(aes(x=measure)) +
+  geom_density() +
+  facet_wrap(~biomarker, scales="free") +
+  labs(title = "Biomarker Distributions",
+       x = "Biomarker Level",
+       y = "Density")
+
+biomarker_plot
+
+biomarkers_transform_longer <- all_dat %>%
+  select(CONP_ID, Visit_label, all_of(BIOMARKERS_TRANS)) %>%
+  pivot_longer(
+    cols = all_of(BIOMARKERS_TRANS),
+    names_to = "biomarker",
+    values_to = "measure"
+  )
+
+biomarker_transformed_plot <- biomarkers_transform_longer %>%
+  ggplot(aes(x=measure)) +
+  geom_density() +
+  facet_wrap(~biomarker, scales="free")
+
+biomarker_transformed_plot
+```
+
+
+# Biomarker QQ plot
+```{r biomarker-qq}
+ggplot(biomarkers_longer, aes(sample = measure)) +
+    stat_qq(size = 0.8, alpha = 0.6) +
+    stat_qq_line(color = "red", linewidth = 1) +
+    facet_wrap(~biomarker, scales = "free", ncol = 3) +
+    labs(title = "Q-Q Plot",
+         x = "Theoretical Quantiles", y = "Sample Quantiles") +
+    theme_minimal() +
+    theme(
+      strip.text = element_text(face = "bold", size = 10),
+      strip.background = element_rect(fill = "grey90", color = NA),
+      plot.title = element_text(size = 12, face = "bold", hjust = 0.5)
+    )
+
+ggplot(biomarkers_transform_longer, aes(sample = measure)) +
+    stat_qq(size = 0.8, alpha = 0.6) +
+    stat_qq_line(color = "red", linewidth = 1) +
+    facet_wrap(~biomarker, scales = "free", ncol = 3) +
+    labs(title = "Q-Q Plot (Transformed)",
+         x = "Theoretical Quantiles", y = "Sample Quantiles") +
+    theme_minimal() +
+    theme(
+      strip.text = element_text(face = "bold", size = 10),
+      strip.background = element_rect(fill = "grey90", color = NA),
+      plot.title = element_text(size = 12, face = "bold", hjust = 0.5)
+    )
+```
+
