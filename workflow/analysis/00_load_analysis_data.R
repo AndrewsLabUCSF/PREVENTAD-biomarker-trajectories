@@ -35,12 +35,25 @@ saveRDS(predictors_dat, file.path(DATA_CLEANED_PATH, "PREVENTAD_predictors.rds")
 # BIOMARKER DATAFRAMES -----------------------------------------------------
 
 ## Baseline ----
-baseline_dat <- biomarkers %>%
+# Handle ptau217 separately as it may have different availability
+ptau217_first <- biomarkers %>%
+  group_by(CONP_ID) %>%
+  filter(!is.na(ptau217)) %>%
+  select(CONP_ID, Date_taken, age, ptau217) %>%
+  slice_head() %>%
+  ungroup()
+
+other_biomarkers_first <- biomarkers %>%
   group_by(CONP_ID) %>%
   select(CONP_ID, all_of(BIOMARKERS)) %>%
+  select(-ptau217) %>%
+  filter_at(vars(-CONP_ID), all_vars(!is.na(.))) %>%
   slice_head() %>%
-  ungroup() %>%
-  left_join(predictors_dat, by = "CONP_ID") %>%
+  ungroup()
+
+biomarker_baseline_dat <- predictors_dat %>%
+  right_join((ptau217_first %>% select(CONP_ID, ptau217)), by = "CONP_ID") %>%
+  left_join(other_biomarkers_first, by = "CONP_ID") %>%
   # Add log transformations
   mutate(
     gfap_log = log(gfap),
@@ -96,7 +109,7 @@ all_dat <- biomarkers %>%
 
 
 # SAVE FINAL DATAFRAMES ---------------------------------------------------
-saveRDS(baseline_dat, file.path(DATA_CLEANED_PATH, "PREVENTAD_baseline.rds"))
+saveRDS(biomarker_baseline_dat, file.path(DATA_CLEANED_PATH, "PREVENTAD_baseline.rds"))
 saveRDS(biomarker_last_dat, file.path(DATA_CLEANED_PATH, "PREVENTAD_lastvisit.rds"))
 saveRDS(all_dat, file.path(DATA_CLEANED_PATH, "PREVENTAD_longitudinal.rds"))
 
