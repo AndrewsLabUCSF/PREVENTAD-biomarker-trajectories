@@ -50,6 +50,7 @@ clinical_cogd <- crs_factors %>%
       gds_score >= 5 ~ 1,
       past_depression == 0 & medusage_antidepressants == 0 ~ 0,
       TRUE ~ NA),
+    
     Atrial_fibrillation = past_atrial_fibrillation,
     
     # Diabetes risk factor present == 1
@@ -65,21 +66,8 @@ clinical_cogd <- crs_factors %>%
     # TBI risk factor present == 1
     TBI = if_else(head_injury_hospitalized == 1 | head_injury_severe == 1,
                   1, 0)) %>%
-  relocate(Age, .after=Sex) %>%
-  relocate(Education_level, .after=Education_years) %>%
-  relocate(BMI, .after=Weight) %>%
-  relocate(BMI_category, .after=BMI) %>%
-  relocate(Hypertension, .after=BMI_category) %>%
-  relocate(High_cholesterol, .after=total_cholesterol_value) %>%
-  relocate(Depression, .after=past_depression) %>%
-  relocate(Atrial_fibrillation, .after=past_atrial_fibrillation) %>%
-  relocate(Diabetes, .after=treatment_diabetes) %>%
-  select(-c(Systolic_blood_pressure, Diastolic_blood_pressure,
-            Height, Weight, total_cholesterol_value, past_depression,
-            past_atrial_fibrillation, hba1c_value, head_injury_hospitalized,
-            head_injury_severe, starts_with("medusage_"), starts_with("treatment_"),
-            diagnosed_impairment, subjective_hearing_impairment,
-            gds_score, pittsburgh_total_score))
+  select(CONP_ID, Age, Sex, Education_level, BMI, BMI_category, Hypertension,
+         High_cholesterol, Insomnia, Depression, Atrial_fibrillation, Diabetes, TBI)
 
 
 lifestyle_cogd <- crs_factors %>%
