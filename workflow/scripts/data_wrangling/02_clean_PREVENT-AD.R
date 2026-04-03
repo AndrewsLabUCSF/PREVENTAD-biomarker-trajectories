@@ -52,6 +52,9 @@ criteria_met <- biomarkers %>%
 
 cat("Participants meeting criteria:", nrow(criteria_met), "\n")
 
+# Save participants
+saveRDS(criteria_met, file.path(DATA_CLEANED_PATH, "PREVENTAD_criteriamet.rds"))
+
 
 # RISK COMPONENT SPECIFIC DATASETS -----------------------------------------
 ## Steps:
@@ -65,7 +68,7 @@ biomarkers_filtered <- biomarkers %>%
   filter(CONP_ID %in% criteria_met$CONP_ID)
 
 # Save dataset
-saveRDS(biomarkers_filtered, file.path(DATA_INTERMEDIATE_PATH$base, "PREVENTAD_biomarkers.rds"))
+saveRDS(biomarkers_filtered, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_biomarkers.rds"))
 
 
 ## Genetics ----
@@ -89,8 +92,8 @@ apoe_dat <- PREVENTAD_raw$genetics %>%
 gwas_filtered <- gwas %>% filter(CONP_ID %in% criteria_met$CONP_ID)
 
 # Save datasets
-saveRDS(apoe_dat, file.path(DATA_INTERMEDIATE_PATH$base, "PREVENTAD_APOE.rds"))
-saveRDS(gwas_filtered, file.path(DATA_INTERMEDIATE_PATH$base, "PREVENTAD_GWAS.rds"))
+saveRDS(apoe_dat, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_APOE.rds"))
+saveRDS(gwas_filtered, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_GWAS.rds"))
 
 
 ## CRS factors ----
@@ -327,7 +330,7 @@ fhx <- PREVENTAD_raw$demographics %>%
   relocate(family_history, .after=ER_AD)
 
 # Save dataset
-saveRDS(fhx, file.path(DATA_INTERMEDIATE_PATH$base, "PREVENTAD_fhx.rds"))
+saveRDS(fhx, file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_fhx.rds"))
 
 
 

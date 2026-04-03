@@ -1,0 +1,1112 @@
+---
+title: "Aim 1: Longitudinal Risk Burden Analysis"
+format:
+  html:
+    embed-resources: true
+    self-contained: true
+    toc: true
+    toc-depth: 3
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+knitr::opts_knit$set(root.dir = here::here())
+```
+
+```{r load-packages}
+library(broom.mixed)
+library(lme4)
+library(patchwork)
+
+source('workflow/scripts/config.R')
+```
+
+# Load and prepare data
+
+```{r load-data}
+# Load longitudinal data
+all_dat <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_longitudinal.rds"))
+baseline_dat <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_baseline.rds"))
+
+# Check data structure
+cat("Data dimensions:", nrow(all_dat), "rows,", ncol(all_dat), "columns\n")
+cat("Number of unique participants:", length(unique(all_dat$CONP_ID)), "\n")
+cat("Time range:", min(all_dat$years, na.rm = TRUE), "to",
+    max(all_dat$years, na.rm = TRUE), "years\n")
+
+# Grand-mean center the years variable
+# This centers time around the average follow-up time across all observations
+mean_years <- mean(all_dat$years, na.rm = TRUE)
+all_dat <- all_dat %>%
+  mutate(years_centered = years - mean_years)
+
+cat("\nGrand-mean centering applied:\n")
+cat("  Original years mean:", round(mean_years, 2), "years\n")
+cat("  Centered years mean:", round(mean(all_dat$years_centered, na.rm = TRUE), 4), "years\n")
+```
+
+## Create risk burden variables
+
+```{r create-risk-burden}
+# Calculate cutoffs based on baseline data only (to avoid data leakage)
+baseline_dat <- all_dat %>%
+  group_by(CONP_ID) %>%
+  slice_min(years, n = 1) %>%
+  ungroup()
+
+# Calculate cutoffs from baseline data
+cogdrisk_cutoff_1sd <- mean(baseline_dat$score_cogd, na.rm = TRUE) +
+                       sd(baseline_dat$score_cogd, na.rm = TRUE)
+libra2_cutoff_1sd <- mean(baseline_dat$score_libra2, na.rm = TRUE) +
+                     sd(baseline_dat$score_libra2, na.rm = TRUE)
+
+cat("CogDrisk 1 SD cutoff:", round(cogdrisk_cutoff_1sd, 2), "\n")
+cat("LIBRA2 1 SD cutoff:", round(libra2_cutoff_1sd, 2), "\n\n")
+
+# Apply risk burden classification to all longitudinal data
+risk_dat_long <- all_dat %>%
+  mutate(
+    # GRS burden - top decile
+    grs_quartile = ntile(GRS, 4),
+    grs_burden = if_else(grs_quartile == 4, 1, 0),
+
+    # Family history burden - 2+ FDR
+    fhx_burden = case_when(
+      str_detect(family_history, "2\\+") ~ 1,
+      TRUE ~ 0
+    ),
+    # fhx_burden = if_else(family_history == "1 FDR", 0, 1),
+    
+    # APOE burden - e4+
+    apoe_burden = if_else(apoe == "e4+", 1, 0),
+
+    # CogDrisk burden - 1 SD above mean (using baseline cutoff)
+    cogdrisk_binary_1sd = ifelse(score_cogd > cogdrisk_cutoff_1sd, 1, 0),
+
+    # LIBRA2 burden - 1 SD above mean (using baseline cutoff)
+    libra2_binary_1sd = ifelse(score_libra2 > libra2_cutoff_1sd, 1, 0),
+
+    # Composite risk scores
+    risk_score_cogd = rowSums(across(c(fhx_burden, apoe_burden,
+                                       cogdrisk_binary_1sd, grs_burden)),
+                             na.rm = TRUE),
+    risk_score_libra2 = rowSums(across(c(fhx_burden, apoe_burden,
+                                         libra2_binary_1sd, grs_burden)),
+                               na.rm = TRUE)
+  )
+
+# Print risk burden distribution
+cat("Risk burden distribution:\n")
+cat("\nCogDrisk risk score:\n")
+table(risk_dat_long$risk_score_cogd) %>% print()
+cat("\nLIBRA2 risk score:\n")
+table(risk_dat_long$risk_score_libra2) %>% print()
+```
+
+## Risk burden distribution
+
+```{r risk-burden-distribution}
+#| fig-width: 12
+#| fig-height: 5
+
+p1 <- ggplot(risk_dat_long, aes(x = factor(risk_score_cogd))) +
+  geom_bar(fill = "steelblue", alpha = 0.7) +
+  labs(title = "CogDrisk Composite Risk Score Distribution",
+       x = "Risk Score (0-4)", y = "Count") +
+  theme_minimal()
+
+p2 <- ggplot(risk_dat_long, aes(x = factor(risk_score_libra2))) +
+  geom_bar(fill = "coral", alpha = 0.7) +
+  labs(title = "LIBRA2 Composite Risk Score Distribution",
+       x = "Risk Score (0-4)", y = "Count") +
+  theme_minimal()
+
+p1 + p2
+```
+
+# Dose-response models
+
+## Model 1: Main effects (risk score as continuous)
+
+**Interpretation:** These models test whether composite risk score (0-4 scale) predicts biomarker levels in a dose-response manner. The beta coefficient represents the change in biomarker level for each 1-unit increase in risk score (e.g., going from 2 to 3 risk factors). CogDrisk models are adjusted for age, sex, and BMI only. LIBRA2 models are adjusted for age, sex, BMI, and education.
+
+```{r dose-main-models}
+models_dose_main <- tribble(
+  ~model, ~predictors,
+  "CogDrisk_dose", "years_centered + risk_score_cogd + (1 | CONP_ID)",
+  "LIBRA2_dose", "years_centered + baseline_age + sex + educ + risk_score_libra2 + (1 | CONP_ID)"
+)
+
+lmm_dose_main <- expand_grid(
+  outcome = BIOMARKERS_TRANS,
+  models_dose_main
+) %>%
+  mutate(
+    eq = glue("{outcome} ~ {predictors}"),
+    res = map(eq, ~lmer(as.formula(.), data = risk_dat_long, REML = FALSE)),
+    dataf = map(res, tidy),
+    mod = map(res, glance)
+  )
+```
+
+## Model 2: Time interactions (risk score × time)
+
+**Interpretation:** These models test whether the rate of biomarker change over time differs by risk score level and other covariates. The interaction term (years_centered:risk_score) shows how much faster (or slower) biomarkers change for each additional risk factor. For LIBRA2, we also include interactions between time and covariates (baseline_age, sex, educ) to account for differential rates of change by demographic factors. A significant positive interaction suggests that higher-risk individuals (or older individuals, etc.) show accelerated biomarker accumulation over time.
+
+```{r dose-interact-models}
+models_dose_interact <- tribble(
+  ~model, ~predictors,
+  "CogDrisk_interact", "years_centered * risk_score_cogd + (1 | CONP_ID)",
+  "LIBRA2_interact", "years_centered * (risk_score_libra2 + baseline_age + sex + educ) + (1 | CONP_ID)"
+)
+
+lmm_dose_interact <- expand_grid(
+  outcome = BIOMARKERS_TRANS,
+  models_dose_interact
+) %>%
+  mutate(
+    eq = glue("{outcome} ~ {predictors}"),
+    res = map(eq, ~lmer(as.formula(.), data = risk_dat_long, REML = FALSE)),
+    dataf = map(res, tidy),
+    mod = map(res, glance)
+  )
+```
+
+## Extract and format results
+
+```{r format-results}
+# Combine all dose-response results
+dose_response_results <- bind_rows(
+  lmm_dose_main %>%
+    select(model, outcome, dataf) %>%
+    mutate(model_type = "Main Effect"),
+  lmm_dose_interact %>%
+    select(model, outcome, dataf) %>%
+    mutate(model_type = "Time Interaction")
+) %>%
+  unnest(dataf) %>%
+  filter(str_detect(term, "^risk_score|^years_centered:risk_score")) %>%
+  mutate(
+    # Confidence intervals
+    conf.low = estimate - (std.error * 1.96),
+    conf.high = estimate + (std.error * 1.96),
+
+    # Significance
+    sig = ifelse(p.value < 0.05, TRUE, FALSE),
+    stars = case_when(
+      p.value >= 0.05 ~ "",
+      p.value >= 0.01 & p.value < 0.05 ~ "*",
+      p.value >= 0.001 & p.value < 0.01 ~ "**",
+      p.value < 0.001 ~ "***"
+    ),
+
+    # Exponentiated values for log-transformed outcomes
+    exp_est = case_when(
+      str_detect(outcome, "_log$") ~ exp(estimate),
+      TRUE ~ NA_real_
+    ),
+    exp_lci = case_when(
+      str_detect(outcome, "_log$") ~ exp(conf.low),
+      TRUE ~ NA_real_
+    ),
+    exp_uci = case_when(
+      str_detect(outcome, "_log$") ~ exp(conf.high),
+      TRUE ~ NA_real_
+    ),
+
+    # Percentage change per unit for all biomarkers
+    pct_change_per_unit = case_when(
+      str_detect(outcome, "_log$") ~ (exp_est - 1) * 100,
+      TRUE ~ NA_real_
+    ),
+
+    # Risk score type
+    risk_type = if_else(str_detect(model, "CogDrisk"), "CogDrisk", "LIBRA2")
+  ) %>%
+  mutate(across(c(estimate, std.error, statistic, p.value,
+                  conf.low, conf.high, exp_est, exp_lci, exp_uci, pct_change_per_unit),
+                ~round(., digits = 3)))
+```
+
+# Results Tables
+
+## CogDrisk: Main effects
+
+```{r table-cogdrisk-main}
+dose_response_cogdrisk_main <- dose_response_results %>%
+  filter(model_type == "Main Effect") %>%
+  filter(risk_type == "CogDrisk") %>%
+  filter(!str_detect(term, "years:")) %>%
+  select(outcome, estimate, conf.low, conf.high,
+         pct_change_per_unit, p.value, stars, sig) %>%
+  mutate(
+    outcome = case_when(
+      outcome == "ab_ratio" ~ "Aβ42/40",
+      outcome == "gfap_log" ~ "GFAP",
+      outcome == "nfl_log" ~ "NfL",
+      outcome == "ptau181_log" ~ "ptau-181",
+      outcome == "ptau217_log" ~ "ptau-217",
+      outcome == "ptau217_ab42_ratio_log" ~ "ptau-217/Aβ42 ratio",
+      TRUE ~ outcome
+    )
+  ) %>%
+  arrange(outcome)
+
+dose_response_cogdrisk_main %>%
+  gt() %>%
+  tab_header(
+    title = md("**CogDrisk: Change per Unit Increase in Risk Score**"),
+    subtitle = "Main effects model"
+  ) %>%
+  fmt_number(
+    columns = c(estimate, conf.low, conf.high, pct_change_per_unit, p.value),
+    decimals = 3
+  ) %>%
+  cols_label(
+    outcome = "Biomarker",
+    estimate = "Beta",
+    conf.low = "Lower CI",
+    conf.high = "Upper CI",
+    pct_change_per_unit = "% Change*",
+    p.value = "p-value",
+    stars = ""
+  ) %>%
+  cols_hide(columns = c(sig)) %>%
+  tab_footnote(
+    footnote = "% Change per unit risk score. For log-transformed biomarkers, calculated as (exp(beta)-1)*100.",
+    locations = cells_column_labels(columns = pct_change_per_unit)
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_body(
+      columns = everything(),
+      rows = sig == TRUE
+    )
+  )
+```
+
+## LIBRA2: Main effects
+
+```{r table-libra2-main}
+dose_response_libra2_main <- dose_response_results %>%
+  filter(model_type == "Main Effect") %>%
+  filter(risk_type == "LIBRA2") %>%
+  filter(!str_detect(term, "years:")) %>%
+  select(outcome, estimate, conf.low, conf.high,
+         pct_change_per_unit, p.value, stars, sig) %>%
+  mutate(
+    outcome = case_when(
+      outcome == "ab_ratio" ~ "Aβ42/40",
+      outcome == "gfap_log" ~ "GFAP",
+      outcome == "nfl_log" ~ "NfL",
+      outcome == "ptau181_log" ~ "ptau-181",
+      outcome == "ptau217_log" ~ "ptau-217",
+      outcome == "ptau217_ab42_ratio_log" ~ "ptau-217/Aβ42 ratio",
+      TRUE ~ outcome
+    )
+  ) %>%
+  arrange(outcome)
+
+dose_response_libra2_main %>%
+  gt() %>%
+  tab_header(
+    title = md("**LIBRA2: Change per Unit Increase in Risk Score**"),
+    subtitle = "Main effects model"
+  ) %>%
+  fmt_number(
+    columns = c(estimate, conf.low, conf.high, pct_change_per_unit, p.value),
+    decimals = 3
+  ) %>%
+  cols_label(
+    outcome = "Biomarker",
+    estimate = "Beta",
+    conf.low = "Lower CI",
+    conf.high = "Upper CI",
+    pct_change_per_unit = "% Change*",
+    p.value = "p-value",
+    stars = ""
+  ) %>%
+  cols_hide(columns = c(sig)) %>%
+  tab_footnote(
+    footnote = "% Change per unit risk score. For log-transformed biomarkers, calculated as (exp(beta)-1)*100.",
+    locations = cells_column_labels(columns = pct_change_per_unit)
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_body(
+      columns = everything(),
+      rows = sig == TRUE
+    )
+  )
+```
+
+## CogDrisk: Time interaction
+
+```{r table-cogdrisk-interact}
+dose_response_interact_cogdrisk <- dose_response_results %>%
+  filter(model_type == "Time Interaction") %>%
+  filter(risk_type == "CogDrisk") %>%
+  filter(str_detect(term, "years_centered:risk_score")) %>%
+  select(outcome, estimate, conf.low, conf.high, p.value, stars, sig) %>%
+  mutate(
+    outcome = case_when(
+      outcome == "ab_ratio" ~ "Aβ42/40",
+      outcome == "gfap_log" ~ "GFAP",
+      outcome == "nfl_log" ~ "NfL",
+      outcome == "ptau181_log" ~ "ptau-181",
+      outcome == "ptau217_log" ~ "ptau-217",
+      outcome == "ptau217_ab42_ratio_log" ~ "ptau-217/Aβ42 ratio",
+      TRUE ~ outcome
+    )
+  ) %>%
+  arrange(outcome)
+
+dose_response_interact_cogdrisk %>%
+  gt() %>%
+  tab_header(
+    title = md("**CogDrisk: Time × Risk Score Interaction**"),
+    subtitle = "Change in slope per unit increase in risk score"
+  ) %>%
+  fmt_number(
+    columns = c(estimate, conf.low, conf.high, p.value),
+    decimals = 3
+  ) %>%
+  cols_label(
+    outcome = "Biomarker",
+    estimate = "Beta",
+    conf.low = "Lower CI",
+    conf.high = "Upper CI",
+    p.value = "p-value",
+    stars = ""
+  ) %>%
+  cols_hide(columns = c(sig)) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_body(
+      columns = everything(),
+      rows = sig == TRUE
+    )
+  )
+```
+
+## LIBRA2: Time interaction
+
+```{r table-libra2-interact}
+dose_response_interact_libra2 <- dose_response_results %>%
+  filter(model_type == "Time Interaction") %>%
+  filter(risk_type == "LIBRA2") %>%
+  filter(str_detect(term, "years_centered:risk_score")) %>%
+  select(outcome, estimate, conf.low, conf.high, p.value, stars, sig) %>%
+  mutate(
+    outcome = case_when(
+      outcome == "ab_ratio" ~ "Aβ42/40",
+      outcome == "gfap_log" ~ "GFAP",
+      outcome == "nfl_log" ~ "NfL",
+      outcome == "ptau181_log" ~ "ptau-181",
+      outcome == "ptau217_log" ~ "ptau-217",
+      outcome == "ptau217_ab42_ratio_log" ~ "ptau-217/Aβ42 ratio",
+      TRUE ~ outcome
+    )
+  ) %>%
+  arrange(outcome)
+
+dose_response_interact_libra2 %>%
+  gt() %>%
+  tab_header(
+    title = md("**LIBRA2: Time × Risk Score Interaction**"),
+    subtitle = "Change in slope per unit increase in risk score"
+  ) %>%
+  fmt_number(
+    columns = c(estimate, conf.low, conf.high, p.value),
+    decimals = 3
+  ) %>%
+  cols_label(
+    outcome = "Biomarker",
+    estimate = "Beta",
+    conf.low = "Lower CI",
+    conf.high = "Upper CI",
+    p.value = "p-value",
+    stars = ""
+  ) %>%
+  cols_hide(columns = c(sig)) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_body(
+      columns = everything(),
+      rows = sig == TRUE
+    )
+  )
+```
+
+# Dose-response plots
+
+## CogDrisk: Main effect
+
+```{r plot-cogdrisk-main}
+#| fig-width: 10
+#| fig-height: 7
+
+plot_data_cogdrisk_main <- dose_response_results %>%
+  filter(model_type == "Main Effect") %>%
+  filter(risk_type == "CogDrisk") %>%
+  filter(!str_detect(term, "years:")) %>%
+  mutate(
+    sig = factor(sig, levels = c(TRUE, FALSE)),
+    outcome_label = case_when(
+      outcome == "ab_ratio" ~ "Aβ42/40",
+      outcome == "gfap_log" ~ "GFAP",
+      outcome == "nfl_log" ~ "NfL",
+      outcome == "ptau181_log" ~ "ptau-181",
+      outcome == "ptau217_log" ~ "ptau-217",
+      outcome == "ptau217_ab42_ratio_log" ~ "ptau-217/Aβ42",
+      TRUE ~ outcome
+    )
+  )
+
+p_cogd_main <- ggplot(plot_data_cogdrisk_main,
+       aes(x = estimate, y = fct_reorder(outcome_label, estimate),
+           xmin = conf.low, xmax = conf.high, alpha = sig)) +
+  geom_point(size = 4, color = "steelblue") +
+  geom_errorbarh(linewidth = 1, height = 0.3, color = "steelblue") +
+  geom_vline(xintercept = 0, linetype = 2, color = "gray40") +
+  scale_alpha_manual(
+    values = c(`FALSE` = 0.3, `TRUE` = 1),
+    labels = c(`FALSE` = "Not Significant", `TRUE` = "Significant"),
+    name = "Significance"
+  ) +
+  labs(
+    x = "Change in Biomarker per Unit Increase in Risk Score (95% CI)",
+    y = NULL,
+    title = "CogDrisk Dose-Response: Main Effects",
+    subtitle = "Change per additional risk factor"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    legend.position = "bottom",
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(face = "bold", size = 15)
+  )
+
+print(p_cogd_main)
+
+ggsave(file.path(AIM1_OUTPUT_PATH$figures, "PREVENTAD_CogDrisk_dose_main.png"),
+       p_cogd_main, width = 10, height = 7, dpi = 300)
+```
+
+## LIBRA2: Main effect
+
+```{r plot-libra2-main}
+#| fig-width: 10
+#| fig-height: 7
+
+plot_data_libra2_main <- dose_response_results %>%
+  filter(model_type == "Main Effect") %>%
+  filter(risk_type == "LIBRA2") %>%
+  filter(!str_detect(term, "years:")) %>%
+  mutate(
+    sig = factor(sig, levels = c(TRUE, FALSE)),
+    outcome_label = case_when(
+      outcome == "ab_ratio" ~ "Aβ42/40",
+      outcome == "gfap_log" ~ "GFAP",
+      outcome == "nfl_log" ~ "NfL",
+      outcome == "ptau181_log" ~ "ptau-181",
+      outcome == "ptau217_log" ~ "ptau-217",
+      outcome == "ptau217_ab42_ratio_log" ~ "ptau-217/Aβ42",
+      TRUE ~ outcome
+    )
+  )
+
+p_libra_main <- ggplot(plot_data_libra2_main,
+       aes(x = estimate, y = fct_reorder(outcome_label, estimate),
+           xmin = conf.low, xmax = conf.high, alpha = sig)) +
+  geom_point(size = 4, color = "coral") +
+  geom_errorbarh(linewidth = 1, height = 0.3, color = "coral") +
+  geom_vline(xintercept = 0, linetype = 2, color = "gray40") +
+  scale_alpha_manual(
+    values = c(`FALSE` = 0.3, `TRUE` = 1),
+    labels = c(`FALSE` = "Not Significant", `TRUE` = "Significant"),
+    name = "Significance"
+  ) +
+  labs(
+    x = "Change in Biomarker per Unit Increase in Risk Score (95% CI)",
+    y = NULL,
+    title = "LIBRA2 Dose-Response: Main Effects",
+    subtitle = "Change per additional risk factor"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    legend.position = "bottom",
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(face = "bold", size = 15)
+  )
+
+print(p_libra_main)
+
+ggsave(file.path(AIM1_OUTPUT_PATH$figures, "PREVENTAD_LIBRA2_dose_main.png"),
+       p_libra_main, width = 10, height = 7, dpi = 300)
+```
+
+## CogDrisk: Time interaction
+
+```{r plot-cogdrisk-interact}
+#| fig-width: 10
+#| fig-height: 7
+
+plot_data_cogdrisk_interact <- dose_response_results %>%
+  filter(model_type == "Time Interaction") %>%
+  filter(risk_type == "CogDrisk") %>%
+  filter(str_detect(term, "years_centered:risk_score")) %>%
+  mutate(
+    sig = factor(sig, levels = c(TRUE, FALSE)),
+    outcome_label = case_when(
+      outcome == "ab_ratio" ~ "Aβ42/40",
+      outcome == "gfap_log" ~ "GFAP",
+      outcome == "nfl_log" ~ "NfL",
+      outcome == "ptau181_log" ~ "ptau-181",
+      outcome == "ptau217_log" ~ "ptau-217",
+      outcome == "ptau217_ab42_ratio_log" ~ "ptau-217/Aβ42",
+      TRUE ~ outcome
+    )
+  )
+
+p_cogd_interact <- ggplot(plot_data_cogdrisk_interact,
+       aes(x = estimate, y = fct_reorder(outcome_label, estimate),
+           xmin = conf.low, xmax = conf.high, alpha = sig)) +
+  geom_point(size = 4, color = "steelblue") +
+  geom_errorbarh(linewidth = 1, height = 0.3, color = "steelblue") +
+  geom_vline(xintercept = 0, linetype = 2, color = "gray40") +
+  scale_alpha_manual(
+    values = c(`FALSE` = 0.3, `TRUE` = 1),
+    labels = c(`FALSE` = "Not Significant", `TRUE` = "Significant"),
+    name = "Significance"
+  ) +
+  labs(
+    x = "Years × Risk Score Interaction (95% CI)",
+    y = NULL,
+    title = "CogDrisk Dose-Response: Time Interaction",
+    subtitle = "Additional change in slope per risk factor"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    legend.position = "bottom",
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(face = "bold", size = 15)
+  )
+
+print(p_cogd_interact)
+
+ggsave(file.path(AIM1_OUTPUT_PATH$figures, "PREVENTAD_CogDrisk_dose_interact.png"),
+       p_cogd_interact, width = 10, height = 7, dpi = 300)
+```
+
+## LIBRA2: Time interaction
+
+```{r plot-libra2-interact}
+#| fig-width: 10
+#| fig-height: 7
+
+plot_data_libra2_interact <- dose_response_results %>%
+  filter(model_type == "Time Interaction") %>%
+  filter(risk_type == "LIBRA2") %>%
+  filter(str_detect(term, "years_centered:risk_score")) %>%
+  mutate(
+    sig = factor(sig, levels = c(TRUE, FALSE)),
+    outcome_label = case_when(
+      outcome == "ab_ratio" ~ "Aβ42/40",
+      outcome == "gfap_log" ~ "GFAP",
+      outcome == "nfl_log" ~ "NfL",
+      outcome == "ptau181_log" ~ "ptau-181",
+      outcome == "ptau217_log" ~ "ptau-217",
+      outcome == "ptau217_ab42_ratio_log" ~ "ptau-217/Aβ42",
+      TRUE ~ outcome
+    )
+  )
+
+p_libra_interact <- ggplot(plot_data_libra2_interact,
+       aes(x = estimate, y = fct_reorder(outcome_label, estimate),
+           xmin = conf.low, xmax = conf.high, alpha = sig)) +
+  geom_point(size = 4, color = "coral") +
+  geom_errorbarh(linewidth = 1, height = 0.3, color = "coral") +
+  geom_vline(xintercept = 0, linetype = 2, color = "gray40") +
+  scale_alpha_manual(
+    values = c(`FALSE` = 0.3, `TRUE` = 1),
+    labels = c(`FALSE` = "Not Significant", `TRUE` = "Significant"),
+    name = "Significance"
+  ) +
+  labs(
+    x = "Years × Risk Score Interaction (95% CI)",
+    y = NULL,
+    title = "LIBRA2 Dose-Response: Time Interaction",
+    subtitle = "Additional change in slope per risk factor"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    legend.position = "bottom",
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(face = "bold", size = 15)
+  )
+
+print(p_libra_interact)
+
+ggsave(file.path(AIM1_OUTPUT_PATH$figures, "PREVENTAD_LIBRA2_dose_interact.png"),
+       p_libra_interact, width = 10, height = 7, dpi = 300)
+```
+
+# Trajectory plots
+
+**Methodology: Generating Predicted Trajectories**
+
+The predicted biomarker trajectories are generated from the linear mixed-effects models (LMMs) fitted above using the following approach:
+
+**1. Model Specification:**
+- **Base model**: `biomarker ~ years_centered × risk_score + (1 | participant_ID)`
+- The time × risk score interaction allows trajectories to have different slopes for each risk level
+- Random intercepts account for between-participant variability in baseline biomarker levels
+
+**2. Prediction Grid Construction:**
+- For each biomarker, a prediction grid is created spanning:
+  - **Time range**: From baseline (0 years) to the maximum observed follow-up for that biomarker
+  - **Risk scores**: All possible composite risk levels (0, 1, 2, 3, 4)
+  - **Time resolution**: Predictions at 0.5-year intervals for smooth trajectory lines
+- Time values are grand-mean centered before prediction (where 0 represents ~2.6 years of follow-up), then transformed back to original scale for plotting
+
+**3. Population-Level Predictions:**
+- Predictions use `predict(..., re.form = NA)` to obtain **marginal** (population-average) predictions
+- This marginalizes over random effects, showing the expected trajectory for an "average" participant at each risk level
+- Individual-level predictions would include random intercepts, but would obscure population-level patterns
+
+**4. Biomarker-Specific Time Ranges:**
+- ptau-217: predictions extend to ~11 years (maximum observed follow-up)
+- Other biomarkers (ptau-181, GFAP, NfL, Aβ42/40, ptau-217/Aβ42): predictions extend to ~4.6 years
+- This prevents extrapolation beyond observed data ranges
+
+**5. Covariate Values (LIBRA2 only):**
+- LIBRA2 models include demographic covariates with time interactions
+- Predictions are generated for a reference profile:
+  - Baseline age: sample mean
+  - Sex: Female
+  - Education: sample mean years
+- Trajectories for other demographic profiles would differ due to covariate × time interactions
+
+**Interpretation Notes:**
+- Predicted lines represent **expected values**, not individual trajectories
+- Confidence intervals are not shown to avoid visual clutter, but uncertainty exists around predictions
+- Diverging trajectories (lines spreading apart over time) indicate significant time × risk interactions
+- Parallel trajectories indicate constant risk score effects across time (main effect only)
+
+## Predicted trajectories: CogDrisk
+
+```{r trajectories-cogdrisk}
+#| fig-width: 14
+#| fig-height: 10
+
+# Calculate maximum follow-up time per biomarker
+biomarker_max_years <- risk_dat_long %>%
+  pivot_longer(
+    cols = all_of(BIOMARKERS_TRANS),
+    names_to = "outcome",
+    values_to = "value"
+  ) %>%
+  filter(!is.na(value)) %>%
+  group_by(outcome) %>%
+  summarise(max_years = max(years, na.rm = TRUE))
+
+# Generate predictions from interaction model
+cogdrisk_interact_models <- lmm_dose_interact %>%
+  filter(str_detect(model, "CogDrisk"))
+
+# Create biomarker-specific prediction data and generate predictions
+cogdrisk_predictions <- cogdrisk_interact_models %>%
+  left_join(biomarker_max_years, by = "outcome") %>%
+  mutate(
+    predictions = map2(res, max_years, ~{
+      # Create prediction grid specific to this biomarker's time range
+      pred_data <- expand_grid(
+        years_centered = seq(-mean_years, .y - mean_years, by = 0.5),
+        risk_score_cogd = 0:4
+      ) %>%
+        mutate(years = years_centered + mean_years)
+
+      # Generate predictions
+      pred_data$predicted <- predict(.x, newdata = pred_data, re.form = NA)
+      pred_data
+    })
+  ) %>%
+  select(outcome, predictions) %>%
+  unnest(predictions)
+
+# Prepare observed data
+risk_dat_long_plot <- risk_dat_long %>%
+  pivot_longer(
+    cols = all_of(BIOMARKERS_TRANS),
+    names_to = "outcome",
+    values_to = "observed"
+  )
+
+# Plot trajectories
+p_cogd_traj <- ggplot() +
+  geom_point(data = risk_dat_long_plot,
+             aes(x = years, y = observed, color = factor(risk_score_cogd)),
+             alpha = 0.2, size = 0.8) +
+  geom_line(data = cogdrisk_predictions,
+            aes(x = years, y = predicted,
+                color = factor(risk_score_cogd),
+                group = risk_score_cogd),
+            linewidth = 1.2) +
+  scale_color_viridis_d(option = "plasma", begin = 0.2, end = 0.9) +
+  facet_wrap(~outcome, scales = "free", ncol = 3) +
+  labs(
+    x = "Years from Baseline",
+    y = "Biomarker Level",
+    color = "Risk Score",
+    title = "CogDrisk: Predicted Biomarker Trajectories by Risk Score",
+    caption = "Note: X-axis scales differ by biomarker to reflect actual data availability"
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    legend.position = "bottom",
+    strip.text = element_text(face = "bold"),
+    strip.background = element_rect(fill = "grey90")
+  )
+
+print(p_cogd_traj)
+
+ggsave(file.path(AIM1_OUTPUT_PATH$figures, "PREVENTAD_CogDrisk_trajectories.png"),
+       p_cogd_traj, width = 14, height = 10, dpi = 300)
+```
+
+**CogDrisk Results Summary:**
+
+Key observations:
+
+- Vertical spacing between trajectories at baseline show that individuals with higher composite risk scores already show elevated biomarker levels at study entry
+- Higher-risk individuals show steeper slopes compared to lower-risk individuals for ptau181, ptau217, and AB ratio (which would indicate accelerated pathology progression)
+
+
+
+## Predicted trajectories: LIBRA2
+
+```{r trajectories-libra2}
+#| fig-width: 14
+#| fig-height: 10
+
+# Generate predictions from interaction model
+libra2_interact_models <- lmm_dose_interact %>%
+  filter(str_detect(model, "LIBRA2"))
+
+# Create biomarker-specific prediction data and generate predictions
+libra2_predictions <- libra2_interact_models %>%
+  left_join(biomarker_max_years, by = "outcome") %>%
+  mutate(
+    predictions = map2(res, max_years, ~{
+      # Create prediction grid specific to this biomarker's time range
+      pred_data <- expand_grid(
+        years_centered = seq(-mean_years, .y - mean_years, by = 0.5),
+        risk_score_libra2 = 0:4,
+        baseline_age = mean(risk_dat_long$baseline_age, na.rm = TRUE),
+        sex = "Female",
+        educ = mean(risk_dat_long$educ, na.rm = TRUE)
+      ) %>%
+        mutate(years = years_centered + mean_years)
+
+      # Generate predictions
+      pred_data$predicted <- predict(.x, newdata = pred_data, re.form = NA)
+      pred_data
+    })
+  ) %>%
+  select(outcome, predictions) %>%
+  unnest(predictions)
+
+# Plot trajectories
+p_libra_traj <- ggplot() +
+  geom_point(data = risk_dat_long_plot,
+             aes(x = years, y = observed, color = factor(risk_score_libra2)),
+             alpha = 0.2, size = 0.8) +
+  geom_line(data = libra2_predictions,
+            aes(x = years, y = predicted,
+                color = factor(risk_score_libra2),
+                group = risk_score_libra2),
+            linewidth = 1.2) +
+  scale_color_viridis_d(option = "plasma", begin = 0.2, end = 0.9) +
+  facet_wrap(~outcome, scales = "free", ncol = 3) +
+  labs(
+    x = "Years from Baseline",
+    y = "Biomarker Level",
+    color = "Risk Score",
+    title = "LIBRA2: Predicted Biomarker Trajectories by Risk Score",
+    caption = "Note: X-axis scales differ by biomarker to reflect actual data availability"
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    legend.position = "bottom",
+    strip.text = element_text(face = "bold"),
+    strip.background = element_rect(fill = "grey90")
+  )
+
+print(p_libra_traj)
+
+ggsave(file.path(AIM1_OUTPUT_PATH$figures, "PREVENTAD_LIBRA2_trajectories.png"),
+       p_libra_traj, width = 14, height = 10, dpi = 300)
+```
+
+## Focused Plot: CogDrisk ptau Trajectories
+
+```{r ptau-cogdrisk-focused-plot}
+#| fig-width: 12
+#| fig-height: 8
+
+# Filter data for ptau217 and ptau181
+ptau217_obs <- risk_dat_long_plot %>%
+  filter(outcome == "ptau217_log")
+
+ptau181_obs <- risk_dat_long_plot %>%
+  filter(outcome == "ptau181_log")
+
+ptau217_pred <- cogdrisk_predictions %>%
+  filter(outcome == "ptau217_log")
+
+ptau181_pred <- cogdrisk_predictions %>%
+  filter(outcome == "ptau181_log")
+
+# Create separate plots for each biomarker with appropriate x-axis limits
+p_ptau217 <- ggplot() +
+  geom_point(data = ptau217_obs,
+             aes(x = years, y = observed, color = factor(risk_score_cogd)),
+             alpha = 0.3, size = 1.5) +
+  geom_line(data = ptau217_pred,
+            aes(x = years, y = predicted,
+                color = factor(risk_score_cogd),
+                group = risk_score_cogd),
+            linewidth = 1.5) +
+  scale_color_viridis_d(option = "plasma", begin = 0.2, end = 0.9,
+                        name = "Risk Score") +
+  scale_x_continuous(limits = c(0, 12), breaks = seq(0, 12, 2)) +
+  labs(
+    x = "Years from Baseline",
+    y = "ptau-217 (log-transformed)",
+    title = "ptau-217 (11 years follow-up)"
+  ) +
+  theme_bw(base_size = 13) +
+  theme(
+    legend.position = "right",
+    plot.title = element_text(face = "bold", size = 12)
+  )
+
+p_ptau181 <- ggplot() +
+  geom_point(data = ptau181_obs,
+             aes(x = years, y = observed, color = factor(risk_score_cogd)),
+             alpha = 0.3, size = 1.5) +
+  geom_line(data = ptau181_pred,
+            aes(x = years, y = predicted,
+                color = factor(risk_score_cogd),
+                group = risk_score_cogd),
+            linewidth = 1.5) +
+  scale_color_viridis_d(option = "plasma", begin = 0.2, end = 0.9,
+                        name = "# of Risk Indicators") +
+  scale_x_continuous(limits = c(0, 5), breaks = seq(0, 5, 1)) +
+  labs(
+    x = "Years from Baseline",
+    y = "ptau-181 (log-transformed)",
+    title = "ptau-181"
+  ) +
+  theme_bw(base_size = 13) +
+  theme(
+    legend.position = "right",
+    plot.title = element_text(face = "bold", size = 12)
+  )
+
+# Create annotation text with cohort and risk indicator information
+n_total <- length(unique(risk_dat_long$CONP_ID))
+n_obs <- nrow(risk_dat_long)
+
+annotation_text <- paste0(
+  "Cohort: PREVENT-AD. N = ", n_total, "; Observations = ", n_obs, "\n",
+  "Risk indicators: FHx: 2+ first-degree relatives with dementia; APOE: e4+ carrier; ",
+  "GRS: Genetic risk score > 1 SD above mean; CogDrisk: Modifiable risk score > 1 SD above mean\n",
+  "Composite risk score: 0-4 scale (sum of binary indicators)"
+)
+
+# Combine plots using patchwork
+p_ptau_cogd <- p_ptau217 / p_ptau181 +
+  plot_annotation(
+    title = "CogDrisk: Phosphorylated Tau Trajectories by Risk Score",
+    caption = annotation_text,
+    theme = theme(
+      plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+      plot.caption = element_text(size = 9, hjust = 0, lineheight = 1.2, margin = margin(t = 10))
+    )
+  )
+
+print(p_ptau_cogd)
+print(p_ptau181)
+
+# Save plot
+ggsave(file.path(AIM1_OUTPUT_PATH$figures, "PREVENTAD_ptau_CogDrisk_trajectories.png"),
+       p_ptau_cogd, width = 12, height = 9, dpi = 300)
+ggsave(file.path(AIM1_OUTPUT_PATH$figures, "PREVENTAD_ptau181_trajectories.png"),
+       p_ptau181, width = 12, height = 9, dpi = 300)
+```
+
+## Focused Plot: CogDrisk + LIBRA2 ptau Trajectories (combined)
+
+```{r ptau-combined-focused-plot}
+#| fig-width: 14
+#| fig-height: 10
+
+# LIBRA2 observed data — risk_score_libra2 is already in risk_dat_long_plot
+ptau217_obs_libra2 <- risk_dat_long_plot %>%
+  filter(outcome == "ptau217_log")
+
+ptau181_obs_libra2 <- risk_dat_long_plot %>%
+  filter(outcome == "ptau181_log")
+
+ptau217_pred_libra2 <- libra2_predictions %>%
+  filter(outcome == "ptau217_log")
+
+ptau181_pred_libra2 <- libra2_predictions %>%
+  filter(outcome == "ptau181_log")
+
+# Shared colour scale
+viridis_scale <- scale_color_viridis_d(option = "plasma", begin = 0.2, end = 0.9,
+                                       name = "Risk Score")
+
+# ptau-217: CogDrisk
+p_ptau217_cogd <- ggplot() +
+  geom_point(data = ptau217_obs,
+             aes(x = years, y = observed, color = factor(risk_score_cogd)),
+             alpha = 0.3, size = 1.2) +
+  geom_line(data = ptau217_pred,
+            aes(x = years, y = predicted,
+                color = factor(risk_score_cogd), group = risk_score_cogd),
+            linewidth = 1.5) +
+  viridis_scale +
+  scale_x_continuous(limits = c(0, 12), breaks = seq(0, 12, 2)) +
+  labs(x = "Years from Baseline", y = "ptau-217 (log)",
+       title = "ptau-217 — CogDrisk") +
+  theme_bw(base_size = 12) +
+  theme(plot.title = element_text(face = "bold", size = 12),
+        legend.position = "none")
+
+# ptau-217: LIBRA2
+p_ptau217_libra2 <- ggplot() +
+  geom_point(data = ptau217_obs_libra2,
+             aes(x = years, y = observed, color = factor(risk_score_libra2)),
+             alpha = 0.3, size = 1.2) +
+  geom_line(data = ptau217_pred_libra2,
+            aes(x = years, y = predicted,
+                color = factor(risk_score_libra2), group = risk_score_libra2),
+            linewidth = 1.5) +
+  viridis_scale +
+  scale_x_continuous(limits = c(0, 12), breaks = seq(0, 12, 2)) +
+  labs(x = "Years from Baseline", y = NULL,
+       title = "ptau-217 — LIBRA2") +
+  theme_bw(base_size = 12) +
+  theme(plot.title = element_text(face = "bold", size = 12),
+        legend.position = "none")
+
+# ptau-181: CogDrisk
+p_ptau181_cogd <- ggplot() +
+  geom_point(data = ptau181_obs,
+             aes(x = years, y = observed, color = factor(risk_score_cogd)),
+             alpha = 0.3, size = 1.2) +
+  geom_line(data = ptau181_pred,
+            aes(x = years, y = predicted,
+                color = factor(risk_score_cogd), group = risk_score_cogd),
+            linewidth = 1.5) +
+  viridis_scale +
+  scale_x_continuous(limits = c(0, 5), breaks = seq(0, 5, 1)) +
+  labs(x = "Years from Baseline", y = "ptau-181 (log)",
+       title = "ptau-181 — CogDrisk") +
+  theme_bw(base_size = 12) +
+  theme(plot.title = element_text(face = "bold", size = 12),
+        legend.position = "bottom")
+
+# ptau-181: LIBRA2
+p_ptau181_libra2 <- ggplot() +
+  geom_point(data = ptau181_obs_libra2,
+             aes(x = years, y = observed, color = factor(risk_score_libra2)),
+             alpha = 0.3, size = 1.2) +
+  geom_line(data = ptau181_pred_libra2,
+            aes(x = years, y = predicted,
+                color = factor(risk_score_libra2), group = risk_score_libra2),
+            linewidth = 1.5) +
+  viridis_scale +
+  scale_x_continuous(limits = c(0, 5), breaks = seq(0, 5, 1)) +
+  labs(x = "Years from Baseline", y = NULL,
+       title = "ptau-181 — LIBRA2") +
+  theme_bw(base_size = 12) +
+  theme(plot.title = element_text(face = "bold", size = 12),
+        legend.position = "bottom")
+
+# 2×2 layout: rows = biomarker, cols = score type
+p_ptau_combined <- (p_ptau217_cogd | p_ptau217_libra2) /
+                   (p_ptau181_cogd  | p_ptau181_libra2) +
+  plot_annotation(
+    title = "Phosphorylated Tau Trajectories by Composite Risk Score",
+    caption = paste0(
+      "Cohort: PREVENT-AD. N = ", length(unique(risk_dat_long$CONP_ID)),
+      "; Observations = ", nrow(risk_dat_long), "\n",
+      "Risk indicators: FHx ≥2 FDR; APOE e4+; GRS top quartile; ",
+      "CogDrisk/LIBRA2 > 1 SD above mean. Composite score: 0–4 scale.\n",
+      "LIBRA2 predictions at mean age, female sex, mean education."
+    ),
+    theme = theme(
+      plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+      plot.caption = element_text(size = 9, hjust = 0, lineheight = 1.2,
+                                  margin = margin(t = 10))
+    )
+  )
+
+print(p_ptau_combined)
+
+ggsave(file.path(AIM1_OUTPUT_PATH$figures, "PREVENTAD_ptau217_combined_trajectory.png"),
+       p_ptau_combined, width = 14, height = 10, dpi = 300)
+```
+
+## Summary
+
+1. Higher-risk individuals should show elevated biomarker levels at baseline (vertical separation of lines)
+2. Lines diverge over time for ptau181 and 217, with higher-risk individuals showing steeper slopes
+
+
+# Save results
+
+```{r save-results}
+# Save main results table
+write_csv(dose_response_results,
+          file.path(AIM1_OUTPUT_PATH$tables, "longitudinal_doseresponse_results.csv"))
+
+# Save model fit statistics
+model_fit <- bind_rows(
+  lmm_dose_main %>%
+    select(model, outcome, mod) %>%
+    unnest(mod) %>%
+    mutate(model_type = "Main Effect"),
+  lmm_dose_interact %>%
+    select(model, outcome, mod) %>%
+    unnest(mod) %>%
+    mutate(model_type = "Time Interaction")
+) %>%
+  select(model_type, model, outcome, AIC, BIC, logLik)
+
+write_csv(model_fit,
+          file.path(AIM1_OUTPUT_PATH$tables, "longitudinal_doseresponse_model_fit.csv"))
+
+# Save interaction models and risk data for use in sensitivity analysis
+saveRDS(lmm_dose_interact,
+        file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_lmm_dose_interact.rds"))
+
+# Save baseline risk scores and covariates per participant
+risk_dat_baseline <- risk_dat_long %>%
+  group_by(CONP_ID) %>%
+  slice_min(years, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  select(CONP_ID, risk_score_cogd, risk_score_libra2, baseline_age, sex, educ)
+
+saveRDS(risk_dat_baseline,
+        file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_risk_dat_baseline.rds"))
+
+cat("\nResults saved to:", AIM1_OUTPUT_PATH$tables, "\n")
+cat("Figures saved to:", AIM1_OUTPUT_PATH$figures, "\n")
+cat("Models saved to:", DATA_INTERMEDIATE_PATH, "\n")
+```

@@ -1,0 +1,998 @@
+---
+title: "Aim 2: Cox Models with SILA Bootstrap Uncertainty"
+format:
+  html:
+    embed-resources: true
+    self-contained: true
+    toc: true
+    toc-depth: 3
+    code-fold: true
+    code-summary: "Show code"
+execute:
+  warning: false
+  message: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+knitr::opts_knit$set(root.dir = here::here())
+```
+
+## Overview
+
+This analysis extends `aim2_cox_sila.qmd` with two key additions:
+
+**1. Re-inclusion of single-visit participants.**
+The main SILA pipeline requires ≥2 longitudinal biomarker observations to fit individual trajectories and was filtered accordingly. However, participants with exactly one GWAS-eligible plasma measurement are still informative for Cox models: their single observed value relative to the Youden threshold (p-tau181: 6.42 pg/mL; p-tau217: 3.06 pg/mL) defines their event status directly. They are included here as observed events or right-censored observations.
+
+**2. Bootstrap propagation of SILA estimation uncertainty.**
+SILA fits are treated as fixed point estimates in `aim2_cox_sila.qmd`. 10 bootstrap samples of multi-visit participants are drawn with replacement, SILA is refit on each sample, and the full Cox + Kaplan-Meier pipeline is re-estimated. The spread across 10 iterations provides confidence intervals that incorporate both sampling variability and SILA fitting uncertainty.
+
+**Primary bootstrap output:**
+Survival probability at each age with 95% bootstrap CI bands from the 10 KM curves per group.
+
+
+```{r packages}
+library(survival)
+library(broom)
+library(patchwork)
+library(gt)
+library(furrr)
+library(silaR)
+library(pROC)
+library(readxl)
+
+source('workflow/scripts/config.R')
+```
+
+## Load and Prepare Data
+
+```{r load-data}
+# Multi-visit participants (≥2 biomarker visits + GWAS) 
+all_dat      <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_longitudinal.rds"))
+baseline_dat <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_baseline.rds"))
+
+mv_ids <- unique(all_dat$CONP_ID)
+
+cat("Multi-visit participants (≥2 visits + GWAS):", length(mv_ids), "\n")
+cat("Total longitudinal observations:", nrow(all_dat), "\n")
+
+# GWAS-only biomarker data (all GWAS-eligible, including single-visit) 
+biomarkers_gwas_all <- readRDS(
+  file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_biomarkers_gwas_all.rds")
+)
+
+all_gwas_ids <- unique(biomarkers_gwas_all$CONP_ID)
+sv_ids       <- setdiff(all_gwas_ids, mv_ids)
+
+cat("\nTotal GWAS-eligible participants:", length(all_gwas_ids), "\n")
+cat("Single-visit participants:", length(sv_ids), "\n")
+
+# Single-visit biomarker observations (one row per participant per biomarker)
+single_visit_wide <- biomarkers_gwas_all %>%
+  filter(CONP_ID %in% sv_ids) %>%
+  group_by(CONP_ID) %>%
+  slice_max(age, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+# Predictors for single-visit participants
+PREVENTAD_raw <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_raw.rds"))
+
+# Computed risk scores (score_cogd, score_libra2, family_history)
+sv_scores <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_singlevisi_scores.rds"))
+
+# APOE genotype
+sv_apoe <- PREVENTAD_raw$genetics %>%
+  filter(CONP_ID %in% sv_ids) %>%
+  mutate(
+    genotype = str_replace_all(APOE, " ", ""),
+    allele1  = as.numeric(str_extract(genotype, "^\\d")),
+    allele2  = as.numeric(str_extract(genotype, "\\d$")),
+    apoe     = case_when(
+      APOE == "3 2"                             ~ "e2+",
+      APOE == "3 3"                             ~ "e3/e3",
+      APOE %in% c("4 2", "4 3", "4 4")         ~ "e4+",
+      TRUE                                      ~ NA_character_
+    ),
+    apoe = factor(apoe, levels = c("e3/e3", "e2+", "e4+"))
+  ) %>%
+  select(CONP_ID, apoe)
+
+# GRS for single-visit participants
+bellenguez_results <- readxl::read_xlsx(
+  "data/raw/41588_2022_1024_MOESM4_ESM.xlsx",
+  sheet = "Supplementary Table 32",
+  skip  = 2
+)
+GRSweights <- data.frame(
+  snp           = paste0(bellenguez_results$rsid, "_", bellenguez_results$`Risk allele`),
+  beta          = bellenguez_results$Beta,
+  effect_allele = bellenguez_results$`Risk allele`
+)
+
+calculate_grs <- function(geno_matrix, weights_df) {
+  common_snps    <- intersect(colnames(geno_matrix), weights_df$snp)
+  geno_subset    <- geno_matrix[, common_snps, drop = FALSE]
+  weights_subset <- weights_df[match(common_snps, weights_df$snp), ]
+  as.numeric(geno_subset %*% weights_subset$beta)
+}
+
+gwas_raw_all  <- PREVENTAD_raw$GWAS
+id_cols       <- c("CONP_ID", "CONP_CandID")
+geno_matrix   <- as.matrix(gwas_raw_all[, !names(gwas_raw_all) %in% id_cols])
+mode(geno_matrix) <- "integer"
+grs_all <- data.frame(
+  CONP_ID = gwas_raw_all$CONP_ID,
+  GRS     = calculate_grs(geno_matrix, GRSweights)
+)
+
+sv_grs <- grs_all %>% filter(CONP_ID %in% sv_ids)
+
+# Sex and education from demographics
+sv_demo <- PREVENTAD_raw$demographics %>%
+  filter(CONP_ID %in% sv_ids) %>%
+  mutate(sex = factor(Sex, levels = c("Female", "Male"))) %>%
+  select(CONP_ID, sex, educ = Education_years)
+
+# Combine single-visit predictors
+sv_predictors <- sv_apoe %>%
+  left_join(sv_grs,                                                          by = "CONP_ID") %>%
+  left_join(sv_scores %>% select(CONP_ID, score_cogd, score_libra2,
+                                  family_history),                           by = "CONP_ID") %>%
+  left_join(sv_demo,                                                         by = "CONP_ID")
+
+cat("\nSingle-visit predictor coverage:\n")
+sv_predictors %>%
+  summarise(
+    n             = n(),
+    has_apoe      = sum(!is.na(apoe)),
+    has_grs       = sum(!is.na(GRS)),
+    has_fhx       = sum(!is.na(family_history)),
+    has_sex       = sum(!is.na(sex)),
+    has_cogd      = sum(!is.na(score_cogd)),
+    has_libra2    = sum(!is.na(score_libra2))
+  ) %>%
+  print()
+
+# Amyloid status from PET data
+THRESHOLD_AMYLOID <- 22.32 
+
+pet_nav <- read_csv(
+  file.path(PREVENTAD_DATA_PATH,
+            "PET_NAV_SUVR_ref-wholeCerebellum_Registered_PREVENTAD_2025-03-21.csv"),
+  show_col_types = FALSE
+)
+
+amyloid_lookup <- pet_nav %>%
+  filter(PET_tracer == "NAV") %>%
+  select(CONP_ID, centiloid = WhlCbl_centiloid) %>%
+  distinct() %>%
+  group_by(CONP_ID) %>%
+  slice_max(centiloid, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  mutate(
+    amyloid_status = factor(
+      if_else(centiloid >= THRESHOLD_AMYLOID, "A+", "A-"),
+      levels = c("A-", "A+")
+    )
+  ) %>%
+  select(CONP_ID, amyloid_status)
+```
+
+```{r create-risk-burden}
+# Biomarker thresholds 
+THRESHOLD_PTAU181 <- 6.42   # pg/mL
+THRESHOLD_PTAU217 <- 3.06   # pg/mL
+
+# Baseline risk burden cutoffs 
+baseline_only_mv <- all_dat %>%
+  group_by(CONP_ID) %>%
+  slice_min(years, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+CUTOFF_COGDRISK <- 7.52
+CUTOFF_LIBRA2 <- 7.35
+
+# Multi-visit predictors
+predictors_mv <- baseline_dat %>%
+  mutate(
+    grs_quartile    = ntile(GRS, 4),
+    grs_burden      = if_else(grs_quartile == 4, 1L, 0L),
+    fhx_burden      = case_when(str_detect(family_history, "2\\+") ~ 1L, TRUE ~ 0L),
+    apoe_burden     = if_else(apoe == "e4+", 1L, 0L),
+    cogdrisk_burden = if_else(score_cogd   > CUTOFF_COGDRISK, 1L, 0L),
+    libra2_burden   = if_else(score_libra2 > CUTOFF_LIBRA2,   1L, 0L),
+    risk_score_cogd   = fhx_burden + apoe_burden + cogdrisk_burden + grs_burden,
+    risk_score_libra2 = fhx_burden + apoe_burden + libra2_burden   + grs_burden,
+  ) %>%
+  select(CONP_ID, age, sex, educ, apoe, apoe_burden, family_history, fhx_burden,
+         GRS, grs_burden, score_cogd, cogdrisk_burden,
+         score_libra2, libra2_burden,
+         risk_score_cogd, risk_score_libra2)
+
+# Single-visit predictors
+grs_q4_cutoff <- quantile(baseline_dat$GRS, 0.75, na.rm = TRUE)
+
+predictors_sv <- sv_predictors %>%
+  mutate(
+    grs_burden  = if_else(!is.na(GRS) & GRS >= grs_q4_cutoff, 1L, 0L),
+    fhx_burden  = case_when(str_detect(as.character(family_history), "2\\+") ~ 1L,
+                             !is.na(family_history)                          ~ 0L,
+                             TRUE                                            ~ NA_integer_),
+    apoe_burden = if_else(apoe == "e4+", 1L, 0L),
+    cogdrisk_burden = if_else(!is.na(score_cogd) & score_cogd > CUTOFF_COGDRISK, 1L, 0L),
+    libra2_burden   = if_else(!is.na(score_libra2) & score_libra2 > CUTOFF_LIBRA2, 1L, 0L),
+    risk_score_cogd   = if_else(
+      !is.na(cogdrisk_burden),
+      fhx_burden + apoe_burden + cogdrisk_burden + grs_burden,
+      NA_integer_
+    ),
+    risk_score_libra2 = if_else(
+      !is.na(libra2_burden),
+      fhx_burden + apoe_burden + libra2_burden + grs_burden,
+      NA_integer_
+    )
+  ) %>%
+  # Add age from their single biomarker visit
+  left_join(single_visit_wide %>% select(CONP_ID, age), by = "CONP_ID") %>%
+  select(CONP_ID, age, sex, educ, apoe, apoe_burden, family_history, fhx_burden,
+         GRS, grs_burden, score_cogd, cogdrisk_burden,
+         score_libra2, libra2_burden,
+         risk_score_cogd, risk_score_libra2)
+
+# Combined predictor table (multi-visit + single-visit)
+predictors_all <- bind_rows(predictors_mv, predictors_sv)
+```
+
+```{r build-cox-data}
+# Multi-visit: derive event status from existing SILA fits
+# Use stored SILA output (the reference fit from the full cohort)
+sila_fits <- read_csv(
+  here("results", "Aim1", "tables", "PREVENTAD_SILA_individual_fits.csv"),
+  show_col_types = FALSE
+)
+
+thresholds <- list(ptau181 = THRESHOLD_PTAU181, ptau217 = THRESHOLD_PTAU217)
+
+sila_first_mv <- sila_fits %>%
+  group_by(subid, biomarker) %>%
+  slice_min(age, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  rename(CONP_ID = subid, age_first = age) %>%
+  select(CONP_ID, biomarker, age_first)
+
+sila_last_mv <- sila_fits %>%
+  group_by(subid, biomarker) %>%
+  slice_max(age, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  rename(CONP_ID = subid, age_last = age) %>%
+  left_join(sila_first_mv, by = c("CONP_ID", "biomarker")) %>%
+  mutate(event    = if_else(val >= valt0, 1L, 0L),
+         # Events --> SILA-estimated crossing age; censored --> last observed visit age
+         surv_age = if_else(val >= valt0 & !is.na(estaget0), estaget0, age_last),
+         source   = "multi-visit")
+
+# ingle-visit: event from observed value vs threshold
+sila_last_sv <- single_visit_wide %>%
+  select(CONP_ID, age, ptau181, ptau217) %>%
+  pivot_longer(cols = c(ptau181, ptau217), names_to = "biomarker", values_to = "val") %>%
+  filter(!is.na(val), is.finite(val)) %>%
+  mutate(
+    valt0    = if_else(biomarker == "ptau181", THRESHOLD_PTAU181, THRESHOLD_PTAU217),
+    event    = if_else(val >= valt0, 1L, 0L),
+    age_last = age,
+    # Use age_first = age_last - 0.5 for left-truncation (single visit = no earlier obs)
+    age_first = age_last - 0.5,
+    surv_age  = age_last,
+    source    = "single-visit"
+  ) %>%
+  select(CONP_ID, biomarker, val, valt0, event, age_last, age_first, surv_age, source)
+
+# Join with predictors + amyloid
+cox_data_full <- bind_rows(
+  sila_last_mv %>% select(CONP_ID, biomarker, val, valt0, event, age_last, age_first, surv_age, source),
+  sila_last_sv
+) %>%
+  left_join(predictors_all, by = "CONP_ID") %>%
+  left_join(amyloid_lookup,  by = "CONP_ID")
+
+cat("\nCox data summary:\n")
+cox_data_full %>%
+  group_by(biomarker, source) %>%
+  summarise(
+    n          = n(),
+    n_events   = sum(event, na.rm = TRUE),
+    pct_events = round(mean(event, na.rm = TRUE) * 100, 1),
+    .groups    = "drop"
+  ) %>%
+  print()
+```
+
+## Kaplan-Meier Survival Curves (Observed Data)
+
+```{r km-apoe-observed}
+#| fig-width: 12
+#| fig-height: 5
+
+# KM by APOE e4 carrier status 
+plot_km_apoe <- function(data, biomarker_label) {
+  dat <- data %>%
+    drop_na(apoe_burden, surv_age, event) %>%
+    mutate(apoe_group = factor(if_else(apoe_burden == 1L, "e4+", "e4-"),
+                               levels = c("e4-", "e4+")))
+
+  km_formula <- as.formula("Surv(surv_age, event) ~ apoe_group")
+  km_fit     <- survfit(km_formula, data = dat)
+  km_tidy    <- broom::tidy(km_fit) %>%
+    mutate(strata = gsub("^apoe_group=", "", strata))
+
+  sd_fit     <- survdiff(km_formula, data = dat)
+  lr_p       <- pchisq(sd_fit$chisq, df = 1, lower.tail = FALSE)
+  pval_label <- if (lr_p < 0.001) "p < 0.001" else paste0("p = ", round(lr_p, 3))
+
+  ggplot(km_tidy, aes(x = time, y = estimate, colour = strata, fill = strata)) +
+    geom_step(linewidth = 0.8) +
+    geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.2, colour = NA) +
+    scale_colour_manual(values = c("e4-" = "#2166AC", "e4+" = "#B2182B"),
+                        name = "APOE \u03b54 status") +
+    scale_fill_manual(values   = c("e4-" = "#2166AC", "e4+" = "#B2182B"),
+                      name = "APOE \u03b54 status") +
+    annotate("text", x = Inf, y = Inf, hjust = 1.05, vjust = 1.5,
+             label = pval_label, size = 3.5) +
+    labs(title = paste(biomarker_label, "\u2013 APOE \u03b54 Status (observed data)"),
+         x = "Age (years)", y = "Probability of ptau Negativity") +
+    theme_minimal(base_size = 12) +
+    theme(legend.position = "bottom")
+}
+
+cox_ptau181 <- cox_data_full %>% filter(biomarker == "ptau181") %>%
+  drop_na(surv_age, event)
+cox_ptau217 <- cox_data_full %>% filter(biomarker == "ptau217") %>%
+  drop_na(surv_age, event)
+
+print(plot_km_apoe(cox_ptau181, "p-tau181"))
+print(plot_km_apoe(cox_ptau217, "p-tau217"))
+```
+
+```{r km-risk-score}
+#| fig-width: 14
+#| fig-height: 6
+
+# Collapse top level to "3+" (only 1 participant has score = 4)
+collapse_risk <- function(x) {
+  factor(if_else(x >= 3, "3+", as.character(x)), levels = c("0", "1", "2", "3+"))
+}
+
+plot_km_risk <- function(data, biomarker_label, group_var, group_label,
+                          palette = c("0" = "#2166AC", "1" = "#74ADD1",
+                                      "2" = "#F46D43", "3+" = "#B2182B")) {
+  km_formula <- as.formula(paste("Surv(surv_age, event) ~", group_var))
+  km_fit     <- survfit(km_formula, data = data)
+  km_tidy    <- broom::tidy(km_fit) %>%
+    mutate(strata = gsub(paste0("^", group_var, "="), "", strata))
+
+  sd_fit     <- survdiff(km_formula, data = data)
+  lr_p       <- pchisq(sd_fit$chisq, df = length(sd_fit$n) - 1, lower.tail = FALSE)
+  pval_label <- if (lr_p < 0.001) "p < 0.001" else paste0("p = ", round(lr_p, 3))
+
+  ggplot(km_tidy, aes(x = time, y = estimate, colour = strata, fill = strata)) +
+    geom_step(linewidth = 0.8) +
+    geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.15, colour = NA) +
+    scale_colour_manual(values = palette, name = group_label) +
+    scale_fill_manual(values   = palette, name = group_label) +
+    annotate("text", x = Inf, y = Inf, hjust = 1.05, vjust = 1.5,
+             label = pval_label, size = 3.5) +
+    labs(title = paste(biomarker_label, "\u2013", group_label),
+         x = "Age (years)", y = "Probability of ptau Negativity") +
+    theme_minimal(base_size = 12) +
+    theme(legend.position = "bottom")
+}
+
+cox_ptau181 <- cox_ptau181 %>%
+  mutate(risk_score_cogd_f   = collapse_risk(risk_score_cogd),
+         risk_score_libra2_f = collapse_risk(risk_score_libra2))
+
+cox_ptau217 <- cox_ptau217 %>%
+  mutate(risk_score_cogd_f   = collapse_risk(risk_score_cogd),
+         risk_score_libra2_f = collapse_risk(risk_score_libra2))
+
+print(plot_km_risk(cox_ptau181, "p-tau181", "risk_score_cogd_f",
+                   "No. CogDrisk indicators (0\u20133+)"))
+print(plot_km_risk(cox_ptau181, "p-tau181", "risk_score_libra2_f",
+                   "No. LIBRA2 indicators (0\u20133+)"))
+print(plot_km_risk(cox_ptau217, "p-tau217", "risk_score_cogd_f",
+                   "No. CogDrisk indicators (0\u20133+)"))
+print(plot_km_risk(cox_ptau217, "p-tau217", "risk_score_libra2_f",
+                   "No. LIBRA2 indicators (0\u20133+)"))
+```
+
+## Bootstrap: SILA Uncertainty Propagation
+
+### Method
+
+For each of 10 bootstrap iterations:  
+1. **Stratified bootstrap**: Multi-visit participants are resampled with replacement, stratified by biomarker positivity status at last visit (within each biomarker), preserving the event rate.  
+2. **SILA refitting**: SILA is refit on the bootstrap sample using the fixed Youden thresholds. Duplicated participants receive unique subids (`CONP_ID_N`) so SILA treats them as independent.  
+3. **Single-visit participants**: Added to each iteration with fixed event status (not bootstrapped, as SILA requires ≥2 observations).  
+4. **Cox + KM**: Cox models (M1–M4) and KM curves stratified by amyloid status are re-estimated on the combined data.  
+5. **Stored outputs**: Cox HRs and KM survival estimates at each age in `age_grid`.  
+
+After 10 iterations, 95% bootstrap CI bands are the 2.5th/97.5th percentile across iterations.  
+
+```{r define-bootstrap-function}
+# Pre-compute single-visit data in long format for efficient use in bootstrap
+single_visit_long <- single_visit_wide %>%
+  select(CONP_ID, age, ptau181, ptau217) %>%
+  pivot_longer(cols = c(ptau181, ptau217), names_to = "biomarker", values_to = "val") %>%
+  filter(!is.na(val), is.finite(val)) %>%
+  mutate(
+    valt0     = if_else(biomarker == "ptau181", THRESHOLD_PTAU181, THRESHOLD_PTAU217),
+    event     = if_else(val >= valt0, 1L, 0L),
+    age_last  = age,
+    surv_age  = age,   # single-visit: no estaget0 available; always use observed age
+    age_first = age - 0.5
+  )
+
+# Pre-pivot multi-visit data for SILA bootstrap
+multi_visit_long <- all_dat %>%
+  select(CONP_ID, age, ptau181, ptau217) %>%
+  pivot_longer(cols = c(ptau181, ptau217), names_to = "biomarker", values_to = "val") %>%
+  filter(!is.na(val), is.finite(val)) %>%
+  arrange(CONP_ID, biomarker, age)
+
+# Age grid for survival estimates
+age_grid <- seq(55, 90, by = 0.5)
+
+# Quartile boundaries (fixed from first-visit cross-sectional slice) 
+quartile_cuts <- purrr::map(c("ptau181", "ptau217"), function(bm) {
+  first_vals <- multi_visit_long %>%
+    filter(biomarker == bm) %>%
+    group_by(CONP_ID) %>%
+    slice_min(age, n = 1, with_ties = FALSE) %>%
+    ungroup()
+  list(
+    q25 = quantile(first_vals$val, 0.25, na.rm = TRUE),
+    q50 = quantile(first_vals$val, 0.50, na.rm = TRUE),
+    q75 = quantile(first_vals$val, 0.75, na.rm = TRUE)
+  )
+}) %>% setNames(c("ptau181", "ptau217"))
+
+# Bootstrap iteration function
+run_bootstrap_iter <- function(iter,
+                                multi_visit_long,
+                                single_visit_long,
+                                predictors_all,
+                                amyloid_lookup,
+                                thresholds,
+                                quartile_cuts,
+                                age_grid) {
+  set.seed(iter)
+
+  bm_results <- purrr::map(c("ptau181", "ptau217"), function(bm) {
+    thr <- thresholds[[bm]]
+    mv  <- multi_visit_long %>% filter(biomarker == bm)
+
+    # Assign first-visit quartile stratum using fixed boundaries
+    cuts <- quartile_cuts[[bm]]
+    first_obs <- mv %>%
+      group_by(CONP_ID) %>%
+      slice_min(age, n = 1, with_ties = FALSE) %>%
+      ungroup() %>%
+      mutate(
+        quartile = case_when(
+          val <= cuts$q25 ~ "Q1",
+          val <= cuts$q50 ~ "Q2",
+          val <= cuts$q75 ~ "Q3",
+          TRUE            ~ "Q4"
+        )
+      )
+
+    # Stratified bootstrap: sample with replacement within each quartile
+    boot_ids <- first_obs %>%
+      group_by(quartile) %>%
+      slice_sample(prop = 1, replace = TRUE) %>%
+      mutate(boot_row = row_number()) %>%
+      ungroup() %>%
+      select(CONP_ID, boot_row)
+
+    # All observations for bootstrapped participants, with unique subids
+    boot_sila <- mv %>%
+      right_join(boot_ids, by = "CONP_ID") %>%
+      mutate(subid = paste0(CONP_ID, "_", boot_row)) %>%
+      # IQR outlier removal (mirrors SILA QMD preprocessing)
+      {
+        q1 <- quantile(.$val, 0.25, na.rm = TRUE)
+        q3 <- quantile(.$val, 0.75, na.rm = TRUE)
+        iqr <- q3 - q1
+        filter(., val >= (q1 - 3 * iqr) & val <= (q3 + 3 * iqr))
+      } %>%
+      select(subid, age, val) %>%
+      arrange(subid, age)
+
+    # Fit SILA wrapped in tryCatch; returns NULL on convergence failure
+    tryCatch({
+      # Verify threshold is within data range
+      thr_adj <- if (thr < min(boot_sila$val) || thr > max(boot_sila$val)) {
+        median(boot_sila$val)
+      } else {
+        thr
+      }
+
+      res    <- sila(boot_sila, dt = 0.25, val0 = thr_adj, maxi = 200)
+      resfit <- sila_estimate(res$tsila, boot_sila)
+
+      # Recover original CONP_ID by stripping boot suffix
+      sila_last <- resfit %>%
+        mutate(CONP_ID = sub("_[0-9]+$", "", subid)) %>%
+        group_by(subid) %>%
+        slice_max(age, n = 1, with_ties = FALSE) %>%
+        ungroup() %>%
+        mutate(event    = as.integer(val >= valt0),
+               # Events --> SILA-estimated crossing age; censored --> last observed visit age
+               surv_age = if_else(val >= valt0 & !is.na(estaget0), estaget0, age),
+               age_last = age)
+
+      sila_first <- resfit %>%
+        mutate(CONP_ID = sub("_[0-9]+$", "", subid)) %>%
+        group_by(subid) %>%
+        slice_min(age, n = 1, with_ties = FALSE) %>%
+        ungroup() %>%
+        select(subid, age_first = age)
+
+      sila_last <- sila_last %>%
+        left_join(sila_first, by = "subid")
+
+      # Single-visit participants: fixed event status, appended to bootstrap data
+      sv <- single_visit_long %>%
+        filter(biomarker == bm) %>%
+        mutate(subid = CONP_ID)
+
+      # Combine multi + single visit
+      cox_dat <- bind_rows(
+        sila_last %>% select(CONP_ID, surv_age, age_last, age_first, event),
+        sv        %>% select(CONP_ID, surv_age, age_last, age_first, event)
+      ) %>%
+        left_join(predictors_all, by = "CONP_ID") %>%
+        left_join(amyloid_lookup,  by = "CONP_ID") %>%
+        drop_na(event, surv_age, age_first, apoe_burden, fhx_burden, grs_burden)
+
+      # Standard and left-truncated survival objects
+      # surv_age = estaget0 for events, age_last for censored 
+      surv_std <- Surv(cox_dat$surv_age, cox_dat$event)
+      surv_lt  <- Surv(cox_dat$age_first, cox_dat$surv_age, cox_dat$event)
+
+      # Cox models (standard + left-truncated) 
+      cox_models <- list(
+        m1_std = tryCatch(
+          coxph(surv_std ~ risk_score_cogd,
+                data = cox_dat %>% drop_na(risk_score_cogd), ties = "efron"),
+          error = function(e) NULL),
+        m2_std = tryCatch(
+          coxph(surv_std ~ age_last + sex + educ + risk_score_libra2,
+                data = cox_dat %>% drop_na(risk_score_libra2, sex, educ), ties = "efron"),
+          error = function(e) NULL),
+        m3_std = tryCatch(
+          coxph(surv_std ~ apoe_burden + fhx_burden + grs_burden,
+                data = cox_dat, ties = "efron"),
+          error = function(e) NULL),
+        m4_std = tryCatch(
+          coxph(surv_std ~ age_last + sex + educ + apoe_burden + fhx_burden +
+                            grs_burden + libra2_burden,
+                data = cox_dat %>% drop_na(libra2_burden, sex, educ), ties = "efron"),
+          error = function(e) NULL),
+        m1_lt = tryCatch(
+          coxph(surv_lt ~ risk_score_cogd,
+                data = cox_dat %>% drop_na(risk_score_cogd), ties = "efron"),
+          error = function(e) NULL),
+        m2_lt = tryCatch(
+          coxph(surv_lt ~ age_last + sex + educ + risk_score_libra2,
+                data = cox_dat %>% drop_na(risk_score_libra2, sex, educ), ties = "efron"),
+          error = function(e) NULL),
+        m3_lt = tryCatch(
+          coxph(surv_lt ~ apoe_burden + fhx_burden + grs_burden,
+                data = cox_dat, ties = "efron"),
+          error = function(e) NULL),
+        m4_lt = tryCatch(
+          coxph(surv_lt ~ age_last + sex + educ + apoe_burden + fhx_burden +
+                           grs_burden + libra2_burden,
+                data = cox_dat %>% drop_na(libra2_burden, sex, educ), ties = "efron"),
+          error = function(e) NULL)
+      )
+
+      hrs <- purrr::imap_dfr(cox_models, function(m, nm) {
+        if (is.null(m)) return(NULL)
+        broom::tidy(m, exponentiate = TRUE, conf.int = FALSE) %>%
+          mutate(model = nm, iter = iter, biomarker = bm)
+      })
+
+      # KM survival by amyloid status
+      km_dat <- cox_dat %>% drop_na(amyloid_status)
+
+      km_amyloid_tbl <- tryCatch({
+        km <- survfit(Surv(surv_age, event) ~ amyloid_status, data = km_dat)
+        s   <- summary(km, times = age_grid, extend = TRUE)
+        tibble(
+          iter   = iter, biomarker = bm,
+          group  = sub("amyloid_status=", "", as.character(s$strata)),
+          age    = s$time, survival = s$surv
+        )
+      }, error = function(e) NULL)
+
+      # KM survival by APOE e4 carrier status
+      km_apoe_tbl <- tryCatch({
+        dat_apoe <- cox_dat %>%
+          drop_na(apoe_burden) %>%
+          mutate(apoe_group = factor(if_else(apoe_burden == 1L, "e4+", "e4-"),
+                                     levels = c("e4-", "e4+")))
+        km <- survfit(Surv(surv_age, event) ~ apoe_group, data = dat_apoe)
+        s  <- summary(km, times = age_grid, extend = TRUE)
+        tibble(
+          iter = iter, biomarker = bm,
+          group = sub("apoe_group=", "", as.character(s$strata)),
+          age = s$time, survival = s$surv
+        )
+      }, error = function(e) NULL)
+
+      # KM survival by CogDrisk risk score (0 / 1 / 2 / 3+) 
+      km_risk_cogd_tbl <- tryCatch({
+        dat_rc <- cox_dat %>%
+          drop_na(risk_score_cogd) %>%
+          mutate(risk_group = factor(
+            if_else(risk_score_cogd >= 3L, "3+", as.character(risk_score_cogd)),
+            levels = c("0", "1", "2", "3+")
+          ))
+        km <- survfit(Surv(surv_age, event) ~ risk_group, data = dat_rc)
+        s  <- summary(km, times = age_grid, extend = TRUE)
+        tibble(
+          iter = iter, biomarker = bm,
+          group = sub("risk_group=", "", as.character(s$strata)),
+          age = s$time, survival = s$surv
+        )
+      }, error = function(e) NULL)
+
+      # KM survival by LIBRA2 risk score (0 / 1 / 2 / 3+) 
+      km_risk_libra2_tbl <- tryCatch({
+        dat_rl <- cox_dat %>%
+          drop_na(risk_score_libra2) %>%
+          mutate(risk_group = factor(
+            if_else(risk_score_libra2 >= 3L, "3+", as.character(risk_score_libra2)),
+            levels = c("0", "1", "2", "3+")
+          ))
+        km <- survfit(Surv(surv_age, event) ~ risk_group, data = dat_rl)
+        s  <- summary(km, times = age_grid, extend = TRUE)
+        tibble(
+          iter = iter, biomarker = bm,
+          group = sub("risk_group=", "", as.character(s$strata)),
+          age = s$time, survival = s$surv
+        )
+      }, error = function(e) NULL)
+
+      list(hrs = hrs, km_amyloid = km_amyloid_tbl, km_apoe = km_apoe_tbl,
+           km_risk_cogd = km_risk_cogd_tbl, km_risk_libra2 = km_risk_libra2_tbl)
+
+    }, error = function(e) NULL)  # SILA convergence failure
+  })
+
+  bm_results_clean <- purrr::compact(bm_results)
+  if (length(bm_results_clean) == 0) return(NULL)
+
+  list(
+    hrs            = dplyr::bind_rows(purrr::map(bm_results_clean, "hrs")),
+    km_amyloid     = dplyr::bind_rows(purrr::map(bm_results_clean, "km_amyloid")),
+    km_apoe        = dplyr::bind_rows(purrr::map(bm_results_clean, "km_apoe")),
+    km_risk_cogd   = dplyr::bind_rows(purrr::map(bm_results_clean, "km_risk_cogd")),
+    km_risk_libra2 = dplyr::bind_rows(purrr::map(bm_results_clean, "km_risk_libra2"))
+  )
+}
+```
+
+```{r run-bootstrap}
+#| cache: false
+
+N_BOOT     <- 10
+BOOT_CACHE <- here("results", "Aim2", "bootstrap_cache.rds")
+
+dir.create(here("results", "Aim2"), recursive = TRUE, showWarnings = FALSE)
+
+if (file.exists(BOOT_CACHE)) {
+  cat("Loading cached bootstrap results from:", BOOT_CACHE, "\n")
+  boot_results <- readRDS(BOOT_CACHE)
+} else {
+  cat("Running", N_BOOT, "bootstrap iterations: \n")
+  plan(multisession, workers = max(1L, parallel::detectCores() - 1L))
+
+  boot_results <- future_map(
+    seq_len(N_BOOT),
+    run_bootstrap_iter,
+    multi_visit_long = multi_visit_long,
+    single_visit_long = single_visit_long,
+    predictors_all   = predictors_all,
+    amyloid_lookup   = amyloid_lookup,
+    thresholds       = thresholds,
+    quartile_cuts    = quartile_cuts,
+    age_grid         = age_grid,
+    .options = furrr_options(seed = TRUE),
+    .progress = TRUE
+  )
+
+  plan(sequential)
+  saveRDS(boot_results, BOOT_CACHE)
+  cat("Bootstrap complete. Results saved to:", BOOT_CACHE, "\n")
+}
+
+# Check convergence rate
+n_success <- sum(!sapply(boot_results, is.null))
+cat("Successful iterations:", n_success, "/", N_BOOT,
+    sprintf("(%.1f%%)\n", 100 * n_success / N_BOOT))
+```
+
+```{r aggregate-bootstrap}
+# Flatten results from all successful iterations
+boot_valid <- purrr::compact(boot_results)
+
+boot_hrs_all        <- dplyr::bind_rows(purrr::map(boot_valid, "hrs"))
+boot_km_amyloid     <- dplyr::bind_rows(purrr::map(boot_valid, "km_amyloid"))
+boot_km_apoe        <- dplyr::bind_rows(purrr::map(boot_valid, "km_apoe"))
+boot_km_risk_cogd   <- dplyr::bind_rows(purrr::map(boot_valid, "km_risk_cogd"))
+boot_km_risk_libra2 <- dplyr::bind_rows(purrr::map(boot_valid, "km_risk_libra2"))
+
+# Helper: summarise bootstrap KM draws to median + 95% CI band
+summarise_km_boot <- function(df) {
+  df %>%
+    group_by(biomarker, group, age) %>%
+    summarise(
+      surv_median = median(survival,          na.rm = TRUE),
+      surv_lo     = quantile(survival, 0.025, na.rm = TRUE),
+      surv_hi     = quantile(survival, 0.975, na.rm = TRUE),
+      n_iters     = sum(!is.na(survival)),
+      .groups     = "drop"
+    )
+}
+
+km_summary_amyloid     <- summarise_km_boot(boot_km_amyloid)
+km_summary_apoe        <- summarise_km_boot(boot_km_apoe)
+km_summary_risk_cogd   <- summarise_km_boot(boot_km_risk_cogd)
+km_summary_risk_libra2 <- summarise_km_boot(boot_km_risk_libra2)
+
+# ── Bootstrap HR summaries ────────────────────────────────────────────────────
+hr_boot_summary <- boot_hrs_all %>%
+  group_by(biomarker, model, term) %>%
+  summarise(
+    HR_median = median(estimate,             na.rm = TRUE),
+    HR_lo     = quantile(estimate, 0.025,    na.rm = TRUE),
+    HR_hi     = quantile(estimate, 0.975,    na.rm = TRUE),
+    n_iters   = sum(!is.na(estimate)),
+    .groups   = "drop"
+  )
+
+cat("Bootstrap amyloid KM rows:", nrow(km_summary_amyloid), "\n")
+cat("Bootstrap APOE KM rows:",    nrow(km_summary_apoe), "\n")
+cat("Bootstrap HR summary rows:", nrow(hr_boot_summary), "\n")
+```
+
+
+## Bootstrap Survival Curves by APOE Status
+
+```{r km-apoe-bootstrap-plot}
+#| fig-width: 12
+#| fig-height: 5
+
+plot_km_bootstrap_apoe <- function(km_summary_df, biomarker_label) {
+  bm_key <- sub("p-tau", "ptau", tolower(biomarker_label))
+  km_summary_df %>%
+    filter(biomarker == bm_key, !is.na(group)) %>%
+    ggplot(aes(x = age, y = surv_median, colour = group, fill = group)) +
+    geom_step(linewidth = 0.9) +
+    geom_ribbon(aes(ymin = surv_lo, ymax = surv_hi), alpha = 0.20, colour = NA) +
+    scale_colour_manual(values = c("e4-" = "#2166AC", "e4+" = "#B2182B"),
+                        name = "APOE status") +
+    scale_fill_manual(values   = c("e4-" = "#2166AC", "e4+" = "#B2182B"),
+                      name = "APOE status") +
+    labs(
+      title    = paste(biomarker_label, "\u2013 ptau Negativity by APOE \u03b54 Status"),
+      subtitle = "Bootstrap median survival (95% CI from 10 SILA bootstrap iterations)",
+      x        = "Age (years)",
+      y        = "Probability of ptau Negativity"
+    ) +
+    coord_cartesian(ylim = c(0, 1)) +
+    theme_minimal(base_size = 12) +
+    theme(legend.position = "bottom")
+}
+
+print(plot_km_bootstrap_apoe(km_summary_apoe, "p-tau181"))
+print(plot_km_bootstrap_apoe(km_summary_apoe, "p-tau217"))
+```
+
+## Bootstrap Survival Curves by Risk Score
+
+```{r km-risk-bootstrap-plot}
+#| fig-width: 14
+#| fig-height: 10
+
+risk_palette <- c("0" = "#2166AC", "1" = "#74ADD1", "2" = "#F46D43", "3+" = "#B2182B")
+
+plot_km_bootstrap_risk <- function(km_summary_df, biomarker_label, score_label) {
+  bm_key <- sub("p-tau", "ptau", tolower(biomarker_label))
+  km_summary_df %>%
+    filter(biomarker == bm_key, !is.na(group)) %>%
+    mutate(group = factor(group, levels = c("0", "1", "2", "3+"))) %>%
+    ggplot(aes(x = age, y = surv_median, colour = group, fill = group)) +
+    geom_step(linewidth = 0.9) +
+    geom_ribbon(aes(ymin = surv_lo, ymax = surv_hi), alpha = 0.15, colour = NA) +
+    scale_colour_manual(values = risk_palette, name = score_label) +
+    scale_fill_manual(values   = risk_palette, name = score_label) +
+    labs(
+      title    = paste(biomarker_label, "\u2013 ptau Negativity by", score_label),
+      subtitle = "Bootstrap median survival (95% CI from 10 SILA bootstrap iterations)",
+      x        = "Age (years)",
+      y        = "Probability of ptau Negativity"
+    ) +
+    coord_cartesian(ylim = c(0, 1)) +
+    theme_minimal(base_size = 12) +
+    theme(legend.position = "bottom")
+}
+
+print(plot_km_bootstrap_risk(km_summary_risk_cogd,   "p-tau181",
+                              "No. CogDrisk indicators (0\u20133+)"))
+print(plot_km_bootstrap_risk(km_summary_risk_libra2,  "p-tau181",
+                              "No. LIBRA2 indicators (0\u20133+)"))
+print(plot_km_bootstrap_risk(km_summary_risk_cogd,   "p-tau217",
+                              "No. CogDrisk indicators (0\u20133+)"))
+print(plot_km_bootstrap_risk(km_summary_risk_libra2,  "p-tau217",
+                              "No. LIBRA2 indicators (0\u20133+)"))
+```
+
+
+## Cox Model Results (Full Observed Data + Bootstrap CI)
+
+```{r fit-cox-full}
+# Fit M1–M4 (standard + left-truncated) on the full observed dataset.
+# Point estimates and p-values come from these models; CIs come from bootstrap.
+fit_cox_models_full <- function(data) {
+  dat      <- data %>% drop_na(surv_age, age_first, event, sex, educ,
+                                apoe_burden, fhx_burden, grs_burden)
+  surv_std <- Surv(dat$surv_age, dat$event)
+  surv_lt  <- Surv(dat$age_first, dat$surv_age, dat$event)
+
+  list(
+    m1_std = coxph(surv_std ~ risk_score_cogd,
+                   data = dat %>% drop_na(risk_score_cogd), ties = "efron"),
+    m2_std = coxph(surv_std ~ age_last + sex + educ + risk_score_libra2,
+                   data = dat %>% drop_na(risk_score_libra2), ties = "efron"),
+    m3_std = coxph(surv_std ~ apoe_burden + fhx_burden + grs_burden,
+                   data = dat, ties = "efron"),
+    m4_std = coxph(surv_std ~ age_last + sex + educ + apoe_burden + fhx_burden +
+                              grs_burden + libra2_burden,
+                   data = dat %>% drop_na(libra2_burden), ties = "efron"),
+    m1_lt  = coxph(surv_lt ~ risk_score_cogd,
+                   data = dat %>% drop_na(risk_score_cogd), ties = "efron"),
+    m2_lt  = coxph(surv_lt ~ age_last + sex + educ + risk_score_libra2,
+                   data = dat %>% drop_na(risk_score_libra2), ties = "efron"),
+    m3_lt  = coxph(surv_lt ~ apoe_burden + fhx_burden + grs_burden,
+                   data = dat, ties = "efron"),
+    m4_lt  = coxph(surv_lt ~ age_last + sex + educ + apoe_burden + fhx_burden +
+                              grs_burden + libra2_burden,
+                   data = dat %>% drop_na(libra2_burden), ties = "efron")
+  )
+}
+
+models_ptau181 <- fit_cox_models_full(cox_ptau181)
+models_ptau217 <- fit_cox_models_full(cox_ptau217)
+```
+
+```{r extract-cox-results-full}
+# Tidy a Cox model into a one-row-per-term tibble with observed HR + p-value.
+# Bootstrap CIs are joined separately via add_boot_ci().
+tidy_cox_full <- function(model, biomarker_label, model_label) {
+  if (is.null(model)) return(NULL)
+  broom::tidy(model, exponentiate = TRUE, conf.int = FALSE) %>%
+    mutate(
+      biomarker = biomarker_label,
+      model     = model_label,
+      p_value   = p.value,
+      sig       = case_when(
+        p.value < 0.001 ~ "***",
+        p.value < 0.01  ~ "**",
+        p.value < 0.05  ~ "*",
+        TRUE            ~ ""
+      ),
+      HR = estimate
+    ) %>%
+    select(biomarker, model, term, HR, p_value, sig)
+}
+
+results_obs_ptau181 <- bind_rows(
+  tidy_cox_full(models_ptau181$m1_std, "p-tau181", "M1: CogDrisk Composite"),
+  tidy_cox_full(models_ptau181$m2_std, "p-tau181", "M2: LIBRA2 Composite"),
+  tidy_cox_full(models_ptau181$m3_std, "p-tau181", "M3: CogDrisk Components"),
+  tidy_cox_full(models_ptau181$m4_std, "p-tau181", "M4: LIBRA2 Components")
+)
+
+results_obs_ptau217 <- bind_rows(
+  tidy_cox_full(models_ptau217$m1_std, "p-tau217", "M1: CogDrisk Composite"),
+  tidy_cox_full(models_ptau217$m2_std, "p-tau217", "M2: LIBRA2 Composite"),
+  tidy_cox_full(models_ptau217$m3_std, "p-tau217", "M3: CogDrisk Components"),
+  tidy_cox_full(models_ptau217$m4_std, "p-tau217", "M4: LIBRA2 Components")
+)
+
+# Join bootstrap CIs onto observed results.
+# Normalises biomarker names and model labels to match observed results.
+add_boot_ci <- function(obs_results, boot_summary) {
+  boot_ci <- boot_summary %>%
+    filter(str_ends(model, "_std")) %>%
+    mutate(
+      biomarker = case_match(biomarker,
+        "ptau181" ~ "p-tau181", "ptau217" ~ "p-tau217", .default = biomarker),
+      model     = case_match(model,
+        "m1_std" ~ "M1: CogDrisk Composite",
+        "m2_std" ~ "M2: LIBRA2 Composite",
+        "m3_std" ~ "M3: CogDrisk Components",
+        "m4_std" ~ "M4: LIBRA2 Components",
+        .default = model)
+    ) %>%
+    select(biomarker, model, term,
+           boot_lo = HR_lo, boot_hi = HR_hi, n_boot_iters = n_iters)
+
+  obs_results %>%
+    left_join(boot_ci, by = c("biomarker", "model", "term"))
+}
+
+all_results <- bind_rows(
+  add_boot_ci(results_obs_ptau181, hr_boot_summary),
+  add_boot_ci(results_obs_ptau217, hr_boot_summary)
+)
+```
+
+### Results: p-tau181
+
+```{r table-ptau181}
+# Format observed HR with bootstrap CI band and significance stars.
+fmt_boot <- function(hr_obs, lo, hi, p) {
+  sig <- dplyr::case_when(
+    p < 0.001 ~ "***", p < 0.01 ~ "**", p < 0.05 ~ "*", TRUE ~ ""
+  )
+  if (!is.na(lo) && !is.na(hi)) {
+    sprintf("%.2f (%.2f\u2013%.2f)%s", hr_obs, lo, hi, sig)
+  } else {
+    sprintf("%.2f (no boot CI)%s", hr_obs, sig)
+  }
+}
+
+make_results_table <- function(results_df, biomarker_label) {
+  results_df %>%
+    filter(!term %in% c("age_last", "sex", "educ")) %>%
+    rowwise() %>%
+    mutate(
+      hr_fmt = fmt_boot(HR, boot_lo, boot_hi, p_value),
+      p_fmt  = format.pval(p_value, digits = 3, eps = 0.001)
+    ) %>%
+    ungroup() %>%
+    select(Model = model, Term = term, `HR (95% boot CI)` = hr_fmt, p = p_fmt) %>%
+    gt() %>%
+    tab_header(
+      title    = paste("Cox Models:", biomarker_label, "Time to Threshold (Bootstrap CI)"),
+      subtitle = "Observed HR with 95% bootstrap CI from 10 SILA iterations"
+    ) %>%
+    tab_style(
+      style     = cell_text(weight = "bold"),
+      locations = cells_column_labels()
+    ) %>%
+    tab_footnote(
+      footnote  = paste(
+        "HR > 1 indicates faster tau positivity onset (earlier age).",
+        "Bootstrap CI incorporates SILA fitting uncertainty (10 iterations).",
+        "Events use SILA-estimated crossing age (estaget0); censored at last observed visit.",
+        "* p<0.05; ** p<0.01; *** p<0.001"
+      ),
+      locations = cells_title()
+    )
+}
+
+make_results_table(all_results %>% filter(biomarker == "p-tau181"), "p-tau181")
+```
+
+### Results: p-tau217
+
+```{r table-ptau217}
+make_results_table(all_results %>% filter(biomarker == "p-tau217"), "p-tau217")
+```

@@ -1,0 +1,347 @@
+---
+title: "CogDrisk and LIBRA2 Complete Case Analysis - PREVENT-AD"
+format: html
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+knitr::opts_knit$set(root.dir = here::here())
+```
+
+```{r libraries}
+library(tidyverse)
+
+source('workflow/scripts/config.R')
+source(COGD_RECODE_FN)
+source(LIBRA_RECODE_FN)
+```
+
+```{r load_data}
+# Load CRS factors (non-imputed and imputed)
+crs_factors <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_crsfactors.rds"))
+crs_factors_imputed <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_crsfactors_imputed.rds"))
+
+# Load scored risk scores
+cogd_scored <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_cogd_scored.rds"))
+cogd_original_scored <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_cogd_original_scored.rds"))
+libra_scored <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_libra2_scored.rds"))
+libra_original_scored <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_libra2_original_scored.rds"))
+
+dat_cogd <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_cogd_original.rds"))
+dat_cogd_imp <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_cogd.rds"))
+dat_libra <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_libra2_original.rds"))
+dat_libra_imp <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_libra2.rds"))
+```
+
+## Missing Data Visualization - CogDrisk
+```{r cogdrisk_missing_viz, fig.width=10, fig.height=6}
+# Select only CogDrisk variables
+dat_cogd_vars <- dat_cogd %>%
+  select(CONP_ID, all_of(cogdrisk_vars))
+
+# Calculate missing data summary
+missing_summary <- crs_factors %>%
+  select(-CONP_ID) %>%
+  summarise(across(everything(), ~sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "Variable", values_to = "N_Missing") %>%
+  mutate(Percent_Missing = round((N_Missing / nrow(dat_cogd)) * 100, 2)) %>%
+  arrange(desc(N_Missing))
+
+# Bar plot of missing data by variable
+p1 <- ggplot(missing_summary, aes(x = reorder(Variable, N_Missing), y = N_Missing)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  geom_text(aes(label = paste0(N_Missing, " (", Percent_Missing, "%)")),
+            hjust = -0.1, size = 3) +
+  coord_flip() +
+  labs(title = "Missing Data by Variable",
+       x = "Variable",
+       y = "Number of Missing Values") +
+  theme_minimal() +
+  ylim(0, max(cogd_missing_summary$N_Missing) * 1.2)
+
+print(p1)
+ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_CogDrisk_missing.png"), p1)
+
+# Heatmap of missing data patterns
+missing_pattern_data <- dat_cogd_vars %>%
+  select(-CONP_ID) %>%
+  mutate(across(everything(), ~is.na(.))) %>%
+  mutate(participant_id = row_number()) %>%
+  pivot_longer(cols = -participant_id, names_to = "Variable", values_to = "Missing") %>%
+  filter(Missing == TRUE)
+
+if(nrow(missing_pattern_data) > 0) {
+  p2 <- ggplot(missing_pattern_data, aes(x = Variable, y = participant_id)) +
+    geom_tile(fill = "red", alpha = 0.7) +
+    coord_flip() +
+    labs(title = "CogDrisk: Missing Data Pattern Heatmap",
+         x = "Variable",
+         y = "Participant") +
+    theme_minimal() +
+    theme(axis.text.y = element_text(size = 8))
+
+  print(p2)
+}
+
+# Print summary table
+cat("\nCogDrisk Missing Data Summary:\n")
+print(cogd_missing_summary)
+```
+
+# CogDrisk Analysis
+```{r cogdrisk_data}
+# Prepare CogDrisk data from crs_factors
+dat_cogd <- prepare_preventad_cogdrisk(crs_factors, verbose = FALSE)
+dat_cogd_imp <- prepare_preventad_cogdrisk(crs_factors_imputed, verbose = FALSE)
+
+# CogDrisk variables for scoring
+cogdrisk_vars <- c("Sex", "Education_level", "Hypertension", "BMI_category",
+                   "High_cholesterol", "Depression", "Atrial_fibrillation",
+                   "Diabetes", "TBI", "Smoking", "Cognitive_engagement",
+                   "Social_engagement", "Physical_inactivity")
+```
+
+## Missing Data Visualization - CogDrisk
+```{r cogdrisk_missing_viz, fig.width=10, fig.height=6}
+# Select only CogDrisk variables
+dat_cogd_vars <- dat_cogd %>%
+  select(CONP_ID, all_of(cogdrisk_vars))
+
+# Calculate missing data summary
+cogd_missing_summary <- dat_cogd_vars %>%
+  select(-CONP_ID) %>%
+  summarise(across(everything(), ~sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "Variable", values_to = "N_Missing") %>%
+  mutate(Percent_Missing = round((N_Missing / nrow(dat_cogd)) * 100, 2)) %>%
+  arrange(desc(N_Missing))
+
+# Bar plot of missing data by variable
+p1 <- ggplot(cogd_missing_summary, aes(x = reorder(Variable, N_Missing), y = N_Missing)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  geom_text(aes(label = paste0(N_Missing, " (", Percent_Missing, "%)")),
+            hjust = -0.1, size = 3) +
+  coord_flip() +
+  labs(title = "CogDrisk: Missing Data by Variable",
+       x = "Variable",
+       y = "Number of Missing Values") +
+  theme_minimal() +
+  ylim(0, max(cogd_missing_summary$N_Missing) * 1.2)
+
+print(p1)
+ggsave(file.path(EDA_OUTPUT_PATH$figures, "PREVENTAD_CogDrisk_missing.png"), p1)
+
+# Heatmap of missing data patterns
+missing_pattern_data <- dat_cogd_vars %>%
+  select(-CONP_ID) %>%
+  mutate(across(everything(), ~is.na(.))) %>%
+  mutate(participant_id = row_number()) %>%
+  pivot_longer(cols = -participant_id, names_to = "Variable", values_to = "Missing") %>%
+  filter(Missing == TRUE)
+
+if(nrow(missing_pattern_data) > 0) {
+  p2 <- ggplot(missing_pattern_data, aes(x = Variable, y = participant_id)) +
+    geom_tile(fill = "red", alpha = 0.7) +
+    coord_flip() +
+    labs(title = "CogDrisk: Missing Data Pattern Heatmap",
+         x = "Variable",
+         y = "Participant") +
+    theme_minimal() +
+    theme(axis.text.y = element_text(size = 8))
+
+  print(p2)
+}
+
+# Print summary table
+cat("\nCogDrisk Missing Data Summary:\n")
+print(cogd_missing_summary)
+```
+
+## Complete CogDrisk Cases
+```{r complete_cogd}
+# Complete cases
+complete_cogd <- dat_cogd %>%
+  filter(complete.cases(select(., all_of(cogdrisk_vars))))
+
+cat(sprintf("\nComplete cases: %d / %d (%.1f%%)\n",
+            nrow(complete_cogd),
+            nrow(dat_cogd),
+            (nrow(complete_cogd) / nrow(dat_cogd)) * 100))
+```
+
+## Comparing Complete Cases vs Imputed Data - CogDrisk
+```{r cogdrisk_comparison}
+# Dataframe of scores comparing complete cases vs imputed
+df2 <- cogd_original_scored %>%
+  select(CONP_ID, original_score = score_cogd) %>%
+  # Join with imputed scored data
+  left_join((cogd_scored %>%
+               select(CONP_ID, imputed_score = score_cogd)),
+            by = "CONP_ID")
+
+# Pivot longer for ggplot
+df2_longer <- df2 %>%
+  pivot_longer(
+    cols = c(original_score, imputed_score),
+    names_to = "method",
+    values_to = "score_value"
+  ) 
+
+# SD ratio and Wilcox test
+var_ratio <- sd(df2$imputed_score, na.rm = TRUE) / sd(df2$original_score, na.rm = TRUE)
+wilcox_result <- wilcox.test(df2$original_score, df2$imputed_score, paired = FALSE)
+
+cat(sprintf("SD ratio (imputed vs complete): %.3f\n", var_ratio))
+cat(sprintf("Wilcoxon test p-value: %.4f\n", wilcox_result$p.value))
+
+plot1 <- ggplot(df2_longer, aes(x = method, y = score_value, fill = method)) +
+  geom_violin(alpha = 0.7) +
+  geom_boxplot(width = 0.1, fill = "white") +
+  stat_compare_means(
+    comparisons = list(c("original_score", "imputed_score")),
+    method = "wilcox.test"
+  ) +
+  labs(subtitle = paste0("SD ratio (imputed vs complete) = ", round(var_ratio, 3)),
+       x = "Method",
+       y = "CogDrisk Score") +
+  ggtitle("CogDrisk: Complete Cases vs Imputed Data") +
+  theme_minimal()
+
+print(plot1)
+ggsave(file.path(EDA_OUTPUT_PATH$figures, "CogD_imputation_comparison.png"), plot1, width = 8, height = 6)
+```
+
+# LIBRA2 Analysis
+```{r libra_data}
+# Prepare LIBRA2 data from crs_factors
+dat_libra <- prepare_preventad_libra(crs_factors, verbose = FALSE)
+dat_libra_imp <- prepare_preventad_libra(crs_factors_imputed, verbose = FALSE)
+
+# LIBRA2 variables for scoring
+libra_vars <- c("Hypertension", "Hypercholesterolemia", "Obesity",
+                "Diabetes", "Depression", "Smoking", "Cognitive_activity",
+                "Physical_activity")
+```
+
+## Missing Data Visualization - LIBRA2
+```{r libra_missing_viz, fig.width=10, fig.height=6}
+# Select only LIBRA2 variables
+dat_libra_vars <- dat_libra %>%
+  select(CONP_ID, all_of(libra_vars))
+
+# Calculate missing data summary
+libra_missing_summary <- dat_libra_vars %>%
+  select(-CONP_ID) %>%
+  summarise(across(everything(), ~sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "Variable", values_to = "N_Missing") %>%
+  mutate(Percent_Missing = round((N_Missing / nrow(dat_libra)) * 100, 2)) %>%
+  arrange(desc(N_Missing))
+
+# Bar plot of missing data by variable
+p3 <- ggplot(libra_missing_summary, aes(x = reorder(Variable, N_Missing), y = N_Missing)) +
+  geom_bar(stat = "identity", fill = "darkgreen") +
+  geom_text(aes(label = paste0(N_Missing, " (", Percent_Missing, "%)")),
+            hjust = -0.1, size = 3) +
+  coord_flip() +
+  labs(title = "LIBRA2: Missing Data by Variable",
+       x = "Variable",
+       y = "Number of Missing Values") +
+  theme_minimal() +
+  ylim(0, max(libra_missing_summary$N_Missing) * 1.2)
+
+print(p3)
+
+# Heatmap of missing data patterns
+missing_pattern_data_libra <- dat_libra_vars %>%
+  select(-CONP_ID) %>%
+  mutate(across(everything(), ~is.na(.))) %>%
+  mutate(participant_id = row_number()) %>%
+  pivot_longer(cols = -participant_id, names_to = "Variable", values_to = "Missing") %>%
+  filter(Missing == TRUE)
+
+if(nrow(missing_pattern_data_libra) > 0) {
+  p4 <- ggplot(missing_pattern_data_libra, aes(x = Variable, y = participant_id)) +
+    geom_tile(fill = "darkred", alpha = 0.7) +
+    coord_flip() +
+    labs(title = "LIBRA2: Missing Data Pattern Heatmap",
+         x = "Variable",
+         y = "Participant") +
+    theme_minimal() +
+    theme(axis.text.y = element_text(size = 8))
+
+  print(p4)
+}
+
+# Print summary table
+cat("\nLIBRA2 Missing Data Summary:\n")
+print(libra_missing_summary)
+```
+
+## Complete LIBRA2 Cases
+
+```{r complete_libra}
+# Complete cases
+complete_libra <- dat_libra %>%
+  filter(complete.cases(select(., all_of(libra_vars))))
+
+cat(sprintf("\nComplete cases: %d / %d (%.1f%%)\n",
+            nrow(complete_libra),
+            nrow(dat_libra),
+            (nrow(complete_libra) / nrow(dat_libra)) * 100))
+```
+
+## Comparing Complete Cases vs Imputed Data - LIBRA2
+```{r libra_comparison}
+# Dataframe of scores comparing complete cases vs imputed
+df_libra <- libra_original_scored %>%
+  select(CONP_ID, original_score = score_libra2) %>%
+  # Join with imputed scored data
+  left_join((libra_scored %>%
+               select(CONP_ID, imputed_score = score_libra2)),
+            by = "CONP_ID")
+
+# Pivot longer for ggplot
+df_libra_longer <- df_libra %>%
+  pivot_longer(
+    cols = c(original_score, imputed_score),
+    names_to = "method",
+    values_to = "score_value"
+  ) 
+
+# SD ratio and Wilcox test
+var_ratio_libra <- sd(df_libra$imputed_score, na.rm = TRUE) / sd(df_libra$original_score, na.rm = TRUE)
+wilcox_result_libra <- wilcox.test(df_libra$original_score, df_libra$imputed_score, paired = FALSE)
+
+cat(sprintf("SD ratio (imputed vs complete): %.3f\n", var_ratio_libra))
+cat(sprintf("Wilcoxon test p-value: %.4f\n", wilcox_result_libra$p.value))
+
+plot_libra <- ggplot(df_libra_longer, aes(x = method, y = score_value, fill = method)) +
+  geom_violin(alpha = 0.7) +
+  geom_boxplot(width = 0.1, fill = "white") +
+  stat_compare_means(
+    comparisons = list(c("Complete cases only", "Imputed (all data)")),
+    method = "wilcox.test"
+  ) +
+  labs(subtitle = paste0("SD ratio (imputed vs complete) = ", round(var_ratio_libra, 3)),
+       x = "Method",
+       y = "LIBRA2 Score") +
+  ggtitle("LIBRA2: Complete Cases vs Imputed Data") +
+  theme_minimal()
+
+print(plot_libra)
+ggsave(file.path(EDA_OUTPUT_PATH$figures, "LIBRA_imputation_comparison.png"), plot_libra, width = 8, height = 6)
+```
+
+# Summary Statistics
+
+```{r summary_stats}
+cat("\n=== Summary ===\n")
+cat(sprintf("CogDrisk - Total: %d, Complete cases: %d (%.1f%%)\n",
+            nrow(dat_cogd),
+            nrow(complete_cogd),
+            (nrow(complete_cogd) / nrow(dat_cogd)) * 100))
+
+cat(sprintf("LIBRA2 - Total: %d, Complete cases: %d (%.1f%%)\n",
+            nrow(dat_libra),
+            nrow(complete_libra),
+            (nrow(complete_libra) / nrow(dat_libra)) * 100))
+```

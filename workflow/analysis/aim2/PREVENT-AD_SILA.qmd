@@ -1,0 +1,592 @@
+---
+title: "Aim 2: SILA Analysis"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: true
+    code-summary: "Show code"
+execute:
+  warning: false
+  message: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+knitr::opts_knit$set(root.dir = here::here())
+```
+
+## Overview
+
+This analysis uses SILA to estimate time to amyloid positivity threshold from longitudinal plasma biomarker data.
+
+**Biomarkers analyzed:**
+
+- p-tau181
+- p-tau217
+
+**Amyloid positivity thresholds:**
+
+- Centiloid ≥ 22.32 (PREVENT-AD cohort-specific)
+
+**Biomarker cutoffs:** Derived from ROC analysis (Youden index optimal cutoffs) in `PREVENT-AD_PET.qmd`
+- p-tau181: 6.42 pg/mL
+- p-tau217: 3.06 pg/mL
+
+```{r packages}
+library(silaR)
+library(patchwork)
+library(pROC)
+
+source('workflow/scripts/config.R')
+```
+
+## Load and Prepare Data
+
+```{r load-data}
+
+# Load pre-processed longitudinal biomarker data
+biomarkers_long <- readRDS(here("data", "intermediate", "PREVENTAD_biomarkers.rds"))
+
+# Get list of participants meeting inclusion criteria
+criteria_met <- biomarkers_long %>%
+  distinct(CONP_ID)
+
+cat("=== INCLUSION CRITERIA (from pre-processed data) ===\n")
+cat("Participants meeting criteria:", nrow(criteria_met), "\n")
+cat("\nLongitudinal data summary:\n")
+cat("Total observations:", nrow(biomarkers_long), "\n")
+cat("Unique participants:", n_distinct(biomarkers_long$CONP_ID), "\n")
+cat("Mean visits per participant:", round(nrow(biomarkers_long) / n_distinct(biomarkers_long$CONP_ID), 1), "\n")
+```
+
+
+```{r load-pet-derive-cutoffs}
+
+# Load PET data
+pet_nav <- read_csv(
+  file.path(PREVENTAD_DATA_PATH,
+            "PET_NAV_SUVR_ref-wholeCerebellum_Registered_PREVENTAD_2025-03-21.csv"),
+  show_col_types = FALSE
+)
+
+pet_info <- read_csv(
+  file.path(PREVENTAD_DATA_PATH,
+            "PET_info_participants_Registered_PREVENTAD_2024-08-01.csv"),
+  show_col_types = FALSE
+)
+
+pet_amyloid <- pet_nav %>%
+  filter(PET_tracer == "NAV") %>%
+  filter(CONP_ID %in% criteria_met$CONP_ID) %>%
+  select(CONP_ID, session, amyloid_index_SUVR, WhlCbl_centiloid) %>%
+  rename(
+    pet_session = session,
+    amyloid_suvr = amyloid_index_SUVR,
+    centiloid = WhlCbl_centiloid
+  )
+
+# Get PET dates
+pet_dates <- pet_info %>%
+  filter(PET_tracer == "NAV") %>%
+  select(CONP_ID, PET_session, Date_PET_visit, Age_PET_visit) %>%
+  distinct() %>%
+  rename(pet_session = PET_session, pet_date = Date_PET_visit, age_at_pet = Age_PET_visit)
+
+pet_amyloid <- pet_amyloid %>%
+  left_join(pet_dates, by = c("CONP_ID", "pet_session"))
+
+cat("\nPET data summary:\n")
+cat("Participants with PET:", n_distinct(pet_amyloid$CONP_ID), "\n")
+cat("Centiloid range:", round(min(pet_amyloid$centiloid, na.rm = TRUE), 1),
+    "to", round(max(pet_amyloid$centiloid, na.rm = TRUE), 1), "\n")
+```
+
+
+```{r derive-cutoffs}
+# Amyloid positivity thresholds (Centiloid)
+THRESHOLD_PRIMARY <- 22.32  
+
+# Function to find closest biomarker measurement to PET scan
+find_closest_biomarker <- function(pet_data, biomarker_data, biomarker_col) {
+
+  # Convert dates to Date objects
+  pet_data <- pet_data %>%
+    mutate(pet_date_parsed = ymd(paste0(pet_date, "-01")))
+
+  biomarker_data <- biomarker_data %>%
+    mutate(biomarker_date_parsed = ymd(paste0(Date_taken, "-01")))
+
+  # For each PET scan, find closest biomarker
+  matched_data <- pet_data %>%
+    left_join(biomarker_data, by = "CONP_ID", relationship = "many-to-many") %>%
+    mutate(
+      date_diff_months = abs(interval(biomarker_date_parsed, pet_date_parsed) / months(1))
+    ) %>%
+    group_by(CONP_ID, pet_session) %>%
+    slice_min(date_diff_months, n = 1, with_ties = FALSE) %>%
+    ungroup()
+
+  return(matched_data)
+}
+
+# Prepare biomarker data for matching 
+biomarkers_ptau181 <- biomarkers_long %>%
+  filter(!is.na(ptau181)) %>%
+  filter(ptau181 > 0) 
+
+biomarkers_ptau217 <- biomarkers_long %>%
+  filter(!is.na(ptau217)) %>%
+  filter(ptau217 > 0) 
+
+# Match PET with biomarkers
+pet_ptau181 <- find_closest_biomarker(pet_amyloid, biomarkers_ptau181, "ptau181") %>%
+  filter(!is.na(ptau181))
+
+pet_ptau217 <- find_closest_biomarker(pet_amyloid, biomarkers_ptau217, "ptau217") %>%
+  filter(!is.na(ptau217))
+
+# Derive optimal cutoffs using ROC/Youden index for PRIMARY threshold (log-transformed)
+pet_ptau181_primary <- pet_ptau181 %>%
+  mutate(amyloid_positive = as.integer(centiloid >= THRESHOLD_PRIMARY))
+
+pet_ptau217_primary <- pet_ptau217 %>%
+  mutate(amyloid_positive = as.integer(centiloid >= THRESHOLD_PRIMARY))
+
+roc_ptau181_primary <- roc(pet_ptau181_primary$amyloid_positive, pet_ptau181_primary$ptau181,
+                           levels = c(0, 1), direction = "<")
+roc_ptau217_primary <- roc(pet_ptau217_primary$amyloid_positive, pet_ptau217_primary$ptau217,
+                           levels = c(0, 1), direction = "<")
+
+cutoff_ptau181_primary <- coords(roc_ptau181_primary, "best", best.method = "youden", ret = "threshold")$threshold
+cutoff_ptau217_primary <- coords(roc_ptau217_primary, "best", best.method = "youden", ret = "threshold")$threshold
+
+
+cat("\n=== OPTIMAL BIOMARKER CUTOFFS (Youden Index) ===\n")
+cat("\nPrimary threshold (CL >=", THRESHOLD_PRIMARY, "):\n")
+cat("  p-tau181:", round(cutoff_ptau181_primary, 2), "pg/mL\n")
+cat("  p-tau217:", round(cutoff_ptau217_primary, 2), "pg/mL\n")
+
+# Create amyloid status lookup for plotting
+amyloid_status_lookup <- pet_amyloid %>%
+  select(CONP_ID, centiloid) %>%
+  distinct() %>%
+  group_by(CONP_ID) %>%
+  slice_max(centiloid, n = 1) %>%  # Use max centiloid if multiple PET scans
+
+  ungroup() %>%
+  mutate(
+    amyloid_status = factor(
+      ifelse(centiloid >= THRESHOLD_PRIMARY, "A+", "A-"),
+      levels = c("A-", "A+")
+    )
+  ) %>%
+  select(CONP_ID, amyloid_status)
+
+cat("\nAmyloid status for plotting:\n")
+cat("  A+:", sum(amyloid_status_lookup$amyloid_status == "A+"), "\n")
+cat("  A-:", sum(amyloid_status_lookup$amyloid_status == "A-"), "\n")
+```
+
+## Longitudinal Biomarker Trajectories
+
+```{r biomarker-trajectories}
+#| fig-width: 12
+#| fig-height: 10
+
+# Join amyloid status to longitudinal biomarker data
+biomarkers_with_status <- biomarkers_long %>%
+  left_join(amyloid_status_lookup, by = "CONP_ID") %>%
+  mutate(amyloid_status = ifelse(is.na(amyloid_status), "No PET", as.character(amyloid_status)),
+         amyloid_status = factor(amyloid_status, levels = c("A-", "A+", "No PET")))
+
+# Combine BL00 and EL00 into single baseline category and create proper visit ordering
+biomarkers_with_status <- biomarkers_with_status %>%
+  mutate(
+    Visit_combined = case_when(
+      Visit_label %in% c("BL00", "EL00") ~ "BL/EL00",
+      TRUE ~ Visit_label
+    ),
+    # Create numeric ordering for visits
+    Visit_order = case_when(
+      Visit_combined == "BL/EL00" ~ 0,
+      grepl("^FU", Visit_combined) ~ as.numeric(gsub("FU", "", Visit_combined)),
+      TRUE ~ NA_real_
+    ),
+    Visit_combined = factor(Visit_combined,
+                            levels = c("BL/EL00", paste0("FU", sprintf("%02d", c(3, 6, 9, 12, 15, 18, 21, 24, 36, 48, 60, 72, 84, 96, 108)))))
+  )
+
+# p-tau181 boxplots by visit and amyloid status
+p_box_181 <- biomarkers_with_status %>%
+  filter(!is.na(ptau181), amyloid_status != "No PET") %>%
+  ggplot(aes(x = Visit_combined, y = ptau181, fill = amyloid_status)) +
+  geom_boxplot(outlier.shape = 21, outlier.size = 1.5, position = position_dodge(width = 0.8)) +
+  scale_fill_manual(
+    values = c("A-" = "#2166AC", "A+" = "#B2182B"),
+    name = "Amyloid Status"
+  ) +
+  labs(
+    title = "p-tau181 by Visit and Amyloid Status",
+    x = "Visit",
+    y = "p-tau181 (pg/mL)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 45, hjust = 1))
+
+# p-tau217 boxplots by visit and amyloid status
+p_box_217 <- biomarkers_with_status %>%
+  filter(!is.na(ptau217), amyloid_status != "No PET") %>%
+  ggplot(aes(x = Visit_combined, y = ptau217, fill = amyloid_status)) +
+  geom_boxplot(outlier.shape = 21, outlier.size = 1.5, position = position_dodge(width = 0.8)) +
+  scale_fill_manual(
+    values = c("A-" = "#2166AC", "A+" = "#B2182B"),
+    name = "Amyloid Status"
+  ) +
+  labs(
+    title = "p-tau217 by Visit and Amyloid Status",
+    x = "Visit",
+    y = "p-tau217 (pg/mL)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Combine plots
+p_box_181 / p_box_217
+```
+
+## SILA Analysis Functions
+
+```{r sila-functions}
+
+# Function to run SILA for a single biomarker
+run_sila_biomarker <- function(data, biomarker_col, threshold_val, biomarker_name) {
+
+  cat("\n--- Running SILA for", biomarker_name, "---\n")
+  cat("Threshold:", threshold_val, "\n")
+
+  # Prepare data in SILA format
+  sila_data <- data %>%
+    filter(!is.na(.data[[biomarker_col]])) %>%
+    filter(!is.na(age)) %>%
+    filter(is.finite(.data[[biomarker_col]])) %>%
+    filter(is.finite(age)) %>%
+    select(subid = CONP_ID, age, val = all_of(biomarker_col)) %>%
+    arrange(subid, age)
+
+  # Remove extreme outliers (beyond 3 SD from mean, or use IQR method)
+  q1 <- quantile(sila_data$val, 0.25, na.rm = TRUE)
+  q3 <- quantile(sila_data$val, 0.75, na.rm = TRUE)
+  iqr <- q3 - q1
+  lower_bound <- q1 - 3 * iqr
+  upper_bound <- q3 + 3 * iqr
+
+  n_before <- nrow(sila_data)
+  sila_data <- sila_data %>%
+    filter(val >= lower_bound & val <= upper_bound)
+  n_after <- nrow(sila_data)
+
+  if (n_before != n_after) {
+    cat("Removed", n_before - n_after, "extreme outliers\n")
+  }
+
+  # Check minimum requirements
+  n_subjects <- n_distinct(sila_data$subid)
+  n_obs <- nrow(sila_data)
+
+  cat("N subjects:", n_subjects, "\n")
+  cat("N observations:", n_obs, "\n")
+  cat("Value range:", round(min(sila_data$val), 2), "-", round(max(sila_data$val), 2), "\n")
+
+  # Check for any remaining issues
+  if (any(!is.finite(sila_data$val)) || any(!is.finite(sila_data$age))) {
+    cat("ERROR: Non-finite values detected after cleaning\n")
+    return(NULL)
+  }
+
+  if (n_subjects < 10) {
+    warning(paste("Insufficient subjects for", biomarker_name, ":", n_subjects))
+    return(NULL)
+  }
+
+  # Ensure threshold is within data range
+  if (threshold_val < min(sila_data$val) || threshold_val > max(sila_data$val)) {
+    cat("WARNING: Threshold", threshold_val, "is outside data range\n")
+    cat("Adjusting to median value:", round(median(sila_data$val), 2), "\n")
+    threshold_val <- median(sila_data$val)
+  }
+
+  # Run SILA
+  tryCatch({
+    cat("Running sila()...\n")
+    res <- sila(sila_data, dt = 0.25, val0 = threshold_val, maxi = 200)
+    cat("Running sila_estimate()...\n")
+    resfit <- sila_estimate(res$tsila, sila_data)
+    cat("SILA completed successfully\n")
+
+    list(
+      biomarker = biomarker_name,
+      threshold = threshold_val,
+      sila_result = res,
+      sila_fit = resfit,
+      n_subjects = n_subjects,
+      n_obs = n_obs
+    )
+  }, error = function(e) {
+    cat("ERROR:", e$message, "\n")
+    warning(paste("SILA failed for", biomarker_name, ":", e$message))
+    return(NULL)
+  })
+}
+
+# Function to create SILA plots
+plot_sila_results <- function(sila_output, title_suffix = "", amyloid_lookup = NULL) {
+
+  if (is.null(sila_output)) return(NULL)
+
+  res <- sila_output$sila_result
+  resfit <- sila_output$sila_fit
+  biomarker <- sila_output$biomarker
+  threshold <- sila_output$threshold
+
+  # Join amyloid status if provided
+  if (!is.null(amyloid_lookup)) {
+    resfit <- resfit %>%
+      left_join(amyloid_lookup, by = c("subid" = "CONP_ID")) %>%
+      mutate(amyloid_status = ifelse(is.na(amyloid_status), "Unknown", as.character(amyloid_status)))
+  }
+
+  # DRS curve
+  p1 <- ggplot(res$tdrs, aes(x = val, y = rate)) +
+    geom_ribbon(aes(ymin = rate - ci, ymax = rate + ci), alpha = 0.3, fill = "#2166AC") +
+    geom_line(color = "#2166AC", linewidth = 1) +
+    geom_vline(xintercept = threshold, linetype = "dashed", color = "red") +
+    labs(
+      title = paste(biomarker, "- Discrete Rate Sampling"),
+      subtitle = title_suffix,
+      x = biomarker,
+      y = expression(Delta * " per Year")
+    ) +
+    theme_minimal()
+
+  # SILA modeled curve
+  p2 <- ggplot(res$tsila, aes(x = adtime, y = val)) +
+    geom_line(color = "#2166AC", linewidth = 1) +
+    geom_hline(yintercept = threshold, linetype = "dashed", color = "red") +
+    labs(
+      title = paste(biomarker, "- SILA Modeled Curve"),
+      subtitle = title_suffix,
+      x = "Time from Threshold (years)",
+      y = biomarker
+    ) +
+    theme_minimal()
+
+  # Individual trajectories aligned to threshold - colored by amyloid status
+  if (!is.null(amyloid_lookup) && "amyloid_status" %in% names(resfit)) {
+    p3 <- ggplot(resfit, aes(x = estdtt0, y = val, group = subid, color = amyloid_status)) +
+      geom_line(alpha = 0.4) +
+      geom_point(alpha = 0.5, size = 0.8) +
+      geom_line(data = res$tsila, aes(x = adtime, y = val, group = NULL, color = NULL),
+                color = "black", linewidth = 1.2) +
+      geom_hline(yintercept = threshold, linetype = "dashed", color = "red") +
+      scale_color_manual(
+        values = c("A-" = "#2166AC", "A+" = "#B2182B", "Unknown" = "gray50"),
+        name = "Amyloid Status"
+      ) +
+      labs(
+        title = paste(biomarker, "- Aligned to Threshold"),
+        subtitle = paste0(title_suffix, " (n=", sila_output$n_subjects, ")"),
+        x = "Estimated Time to Threshold (years)",
+        y = biomarker
+      ) +
+      theme_minimal() +
+      theme(legend.position = "bottom")
+  } else {
+    p3 <- ggplot(resfit, aes(x = estdtt0, y = val, group = subid)) +
+      geom_line(alpha = 0.3, color = "gray50") +
+      geom_point(alpha = 0.3, size = 0.5) +
+      geom_line(data = res$tsila, aes(x = adtime, y = val, group = NULL),
+                color = "#B2182B", linewidth = 1.2) +
+      geom_hline(yintercept = threshold, linetype = "dashed", color = "red") +
+      labs(
+        title = paste(biomarker, "- Aligned to Threshold"),
+        subtitle = paste0(title_suffix, " (n=", sila_output$n_subjects, ")"),
+        x = "Estimated Time to Threshold (years)",
+        y = biomarker
+      ) +
+      theme_minimal()
+  }
+
+  list(drs = p1, sila = p2, aligned = p3)
+}
+
+# Function to extract SILA summary statistics
+extract_sila_summary <- function(sila_output) {
+
+  if (is.null(sila_output)) {
+    return(tibble(
+      biomarker = NA, threshold = NA, n_subjects = NA, n_obs = NA,
+      mean_time_to_threshold = NA, sd_time_to_threshold = NA,
+      median_time_to_threshold = NA, pct_past_threshold = NA
+    ))
+  }
+
+  resfit <- sila_output$sila_fit
+
+  # Get baseline (first observation) estimates per subject
+  baseline_estimates <- resfit %>%
+    group_by(subid) %>%
+    slice_min(age, n = 1) %>%
+    ungroup()
+
+  tibble(
+    biomarker = sila_output$biomarker,
+    threshold = sila_output$threshold,
+    n_subjects = sila_output$n_subjects,
+    n_obs = sila_output$n_obs,
+    mean_time_to_threshold = mean(baseline_estimates$estdtt0, na.rm = TRUE),
+    sd_time_to_threshold = sd(baseline_estimates$estdtt0, na.rm = TRUE),
+    median_time_to_threshold = median(baseline_estimates$estdtt0, na.rm = TRUE),
+    pct_past_threshold = mean(baseline_estimates$estdtt0 < 0, na.rm = TRUE) * 100
+  )
+}
+```
+
+## Run SILA Analysis
+
+### Primary Analysis (PREVENT-AD Threshold: CL ≥ 22.32)
+
+```{r sila-primary}
+#| fig-width: 12
+#| fig-height: 8
+
+# Run SILA for each biomarker - Primary threshold (log-transformed)
+sila_results_primary <- list()
+
+# ptau181 (log)
+sila_results_primary$ptau181 <- run_sila_biomarker(
+  biomarkers_long, "ptau181", cutoff_ptau181_primary, "p-tau181"
+)
+
+# ptau217 (log)
+sila_results_primary$ptau217 <- run_sila_biomarker(
+  biomarkers_long, "ptau217", cutoff_ptau217_primary, "p-tau217"
+)
+
+# Create plots for primary analysis (with amyloid status coloring)
+plots_primary <- lapply(sila_results_primary, function(x) {
+  plot_sila_results(x, paste0("ptau181 ≥ 6.42; ptau217 ≥ 3.06"),
+                    amyloid_lookup = amyloid_status_lookup)
+})
+
+# Display aligned trajectory plots
+aligned_plots <- compact(lapply(plots_primary, function(x) x$aligned))
+if (length(aligned_plots) > 0) {
+  wrap_plots(aligned_plots, ncol = 2)
+}
+```
+
+## Summary Results
+
+### Primary Threshold (PREVENT-AD Specific: CL ≥ 22.32)
+
+```{r summary-primary}
+
+summary_primary <- bind_rows(lapply(sila_results_primary, extract_sila_summary)) %>%
+  filter(!is.na(biomarker)) %>%
+  mutate(analysis = "Primary (CL ≥ 22.32)")
+
+summary_primary %>%
+  select(-analysis) %>%
+  gt() %>%
+  tab_header(
+    title = "SILA Results - Primary Analysis",
+    subtitle = paste0("Amyloid positivity: Centiloid ≥ ", THRESHOLD_PRIMARY, " (PREVENT-AD specific)")
+  ) %>%
+  fmt_number(
+    columns = c(threshold, mean_time_to_threshold, sd_time_to_threshold, median_time_to_threshold),
+    decimals = 2
+  ) %>%
+  fmt_number(columns = pct_past_threshold, decimals = 1) %>%
+  cols_label(
+    biomarker = "Biomarker",
+    threshold = "Cutoff (pg/mL)",
+    n_subjects = "N Subjects",
+    n_obs = "N Observations",
+    mean_time_to_threshold = "Mean Time (years)",
+    sd_time_to_threshold = "SD",
+    median_time_to_threshold = "Median",
+    pct_past_threshold = "% Past Threshold"
+  )
+```
+
+- Individuals on average are already biomarker positive
+
+
+
+## Individual SILA Curves
+
+### Discrete Rate Sampling Curves
+
+```{r drs-curves}
+#| fig-width: 10
+#| fig-height: 4
+
+# DRS plots - Primary
+drs_plots_primary <- compact(lapply(plots_primary, function(x) x$drs))
+if (length(drs_plots_primary) > 0) {
+  wrap_plots(drs_plots_primary, ncol = 2) +
+    plot_annotation(title = "Discrete Rate Sampling Curves - Primary Threshold")
+}
+```
+
+### SILA Modeled Curves
+
+```{r sila-curves}
+#| fig-width: 10
+#| fig-height: 4
+
+# SILA modeled curves - Primary
+sila_plots_primary <- compact(lapply(plots_primary, function(x) x$sila))
+if (length(sila_plots_primary) > 0) {
+  wrap_plots(sila_plots_primary, ncol = 2) +
+    plot_annotation(title = "SILA Modeled Curves - Primary Threshold")
+}
+```
+
+## Save Results
+
+```{r save-results}
+# Save summary table
+write_csv(summary_primary,
+          here("results", "Aim1", "tables", "PREVENTAD_SILA_summary.csv"))
+
+# Save individual SILA fit data for further analysis
+sila_fits_primary <- lapply(names(sila_results_primary), function(nm) {
+  if (!is.null(sila_results_primary[[nm]]) && !is.null(sila_results_primary[[nm]]$sila_fit)) {
+    sila_results_primary[[nm]]$sila_fit %>%
+      mutate(biomarker = nm, threshold_type = "primary")
+  } else {
+    NULL
+  }
+}) %>%
+  compact() %>%
+  bind_rows()
+
+if (nrow(sila_fits_primary) > 0) {
+  write_csv(sila_fits_primary,
+            here("results", "Aim1", "tables", "PREVENTAD_SILA_individual_fits.csv"))
+  saveRDS(sila_fits_primary,
+          here("data", "intermediate", "PREVENTAD_SILA_individual_fits.rds"))
+  cat("- results/Aim1/tables/PREVENTAD_SILA_individual_fits.csv\n")
+  cat("- data/intermediate/PREVENTAD_SILA_individual_fits.rds\n")
+} else {
+  cat("Warning: No SILA fit data to save\n")
+}
+
+cat("Results saved to:\n")
+cat("- results/Aim1/tables/PREVENTAD_SILA_summary.csv\n")
+```
+

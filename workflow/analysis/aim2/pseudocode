@@ -1,0 +1,96 @@
+# SETUP
+
+## Participants
+# Multi-visit (≥2 biomarker visits + GWAS)
+mv_ids <- unique(longitudinal_data$CONP_ID)
+
+# Single-visit (GWAS-eligible but only 1 biomarker observation)
+sv_ids <- setdiff(all_gwas_ids, mv_ids)
+
+## Fixed thresholds (Youden index)
+THRESHOLD_PTAU181 <- 6.42   # pg/mL
+THRESHOLD_PTAU217 <- 3.06   # pg/mL
+
+## Event status for single-visit participants (fixed across all iterations)
+# Defined by observed value vs threshold; no SILA needed
+sv_event <- observed_val >= threshold
+sv_age_first <- age_last - 0.5   # left-truncation offset for single visit
+
+
+# PER ITERATION (×10)
+run_bootstrap_iter(iter):
+
+  loop over biomarkers (ptau181, ptau217):
+
+    thr <- threshold for current biomarker
+
+    # 1. Identify last-visit positivity status for multi-visit participants
+    #    (used as strata to preserve event rate in each bootstrap sample)
+    last_obs <- multi_visit_long
+      |> group_by(CONP_ID)
+      |> slice_max(age)
+      |> mutate(pos = val >= thr)   # binary: positive / negative
+
+    # 2. Stratified bootstrap (within pos/neg strata, sample with replacement)
+    boot_ids <- last_obs
+      |> group_by(pos)
+      |> slice_sample(prop = 1, replace = TRUE)
+      |> mutate(boot_row = row_number())   # track copies of same participant
+
+    # 3. Expand to full longitudinal series for each bootstrapped ID
+    boot_sila <- multi_visit_long
+      |> right_join(boot_ids on CONP_ID)
+      |> mutate(subid = paste0(CONP_ID, "_", boot_row))   # unique SILA ID per copy
+      |> apply IQR outlier removal (3×IQR rule)
+      |> select(subid, age, val)
+
+    # 4. Fit SILA on bootstrap sample
+    #    Adjust threshold if outside data range (use median as fallback)
+    sila_res <- sila(boot_sila, dt = 0.25, val0 = thr_adj, maxi = 200)
+    resfit   <- sila_estimate(sila_res$tsila, boot_sila)
+
+    # 5. Extract event status from SILA fits
+    sila_last  <- resfit |> group_by(subid) |> slice_max(age)   # last fitted value
+    sila_first <- resfit |> group_by(subid) |> slice_min(age)   # for left-truncation
+    event      <- sila_last$val >= thr
+
+    # 6. Append single-visit participants (fixed event status, not bootstrapped)
+    sv <- single_visit_long |> filter(biomarker == bm)
+
+    # 7. Combine multi-visit (SILA-derived) + single-visit
+    cox_dat <- bind_rows(
+      sila_last [CONP_ID, age_last, age_first, event],
+      sv        [CONP_ID, age_last, age_first, event]
+    )
+    |> left_join predictors (APOE, GRS, FHx, CogDrisk, LIBRA2)
+    |> left_join amyloid_lookup
+    |> drop_na(event, age_last, age_first, apoe_burden, fhx_burden, grs_burden)
+
+    # 8. Fit Cox models (standard + left-truncated)
+    surv_std <- Surv(age_last, event)
+    surv_lt  <- Surv(age_first, age_last, event)
+
+    M1: ~ risk_score_cogd
+    M2: ~ age + sex + educ + risk_score_libra2
+    M3: ~ apoe_burden + fhx_burden + grs_burden
+    M4: ~ age + sex + educ + apoe_burden + fhx_burden + grs_burden + libra2_burden
+
+    hrs <- tidy(each model, exponentiate = TRUE) + {iter, biomarker, model}
+
+    # 9. Fit KM curves (standard Surv, evaluated at fixed age_grid)
+    KM by: amyloid status (A+ / A-)
+    KM by: APOE e4 carrier (e4+ / e4-)
+    KM by: CogDrisk risk count (0 / 1 / 2 / 3+)
+    KM by: LIBRA2 risk count (0 / 1 / 2 / 3+)
+
+    store survival estimates at age_grid → {iter, biomarker, group, age, survival}
+
+  return(HRs, km_amyloid, km_apoe, km_risk_cogd, km_risk_libra2)
+
+
+# AGGREGATION (across 10 successful iterations)
+# HRs: group by (biomarker, model, term)
+hr_summary <- median(estimate) + quantile(estimate, c(0.025, 0.975))
+
+# KM: group by (biomarker, group, age)
+km_summary <- median(survival) + quantile(survival, c(0.025, 0.975))

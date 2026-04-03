@@ -152,6 +152,7 @@ apoe_plot
 ```
 
 ### Family history
+
 ```{r fhx}
 fhx_plot <- lastvisit_longer %>%
   ggplot(aes(x=family_history, y=measure, fill=family_history)) +
@@ -173,9 +174,6 @@ fhx_plot
 # Save plot
 # ggsave(file.path(AIM1_OUTPUT_PATH$figures, "PREVENTAD_apoe_vs_BBM.png"), plot2)
 ```
-**Key Findings:**
-- 
-
 
 ## Demographic risk factor associations with biomarker levels (last visit)
 
@@ -260,6 +258,7 @@ dem_educ_plot
 ## Individual CRS factor associations with biomarker levels (last visit)
 
 ### CogDrisk
+
 ```{r cogd-factors-setup}
 cogd_bm_dat <- lastvisit_dat %>%
   left_join(cogd_dat, by="CONP_ID") 

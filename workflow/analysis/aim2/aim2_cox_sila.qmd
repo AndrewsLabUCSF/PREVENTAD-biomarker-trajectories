@@ -1,0 +1,736 @@
+---
+title: "Aim 2: Cox Models Using SILA-Derived Time to Tau Positivity"
+format:
+  html:
+    embed-resources: true
+    self-contained: true
+    toc: true
+    toc-depth: 3
+    code-fold: true
+    code-summary: "Show code"
+execute:
+  warning: false
+  message: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+knitr::opts_knit$set(root.dir = here::here())
+```
+
+## Overview
+
+This analysis fits **Cox proportional hazards models** to examine whether modifiable lifestyle and genetic risk factors predict the estimated age of onset to positivity, derived from SILA models.
+
+**Outcome construction:**
+
+The SILA models estimated each participant's trajectory relative to a plasma biomarker positivity threshold (Youden-index optimal cutoff from the PET analysis: 6.42 pg/mL for p-tau181, 3.06 pg/mL for p-tau217). Survival time and event status are derived directly from observed SILA values:
+
+- **Event** = last observed plasma biomarker value (`val`) ≥ positivity threshold (`valt0`); survival time = age at last biomarker measurement (`age_last`)
+- **Right-censored** = last observed value below threshold; censored at `age_last`
+- **Study entry age** = age at first biomarker measurement (`age_first`), used as the left-truncation time in the delayed-entry survival models
+
+The time scale is **age** (years), allowing survival curves to be interpreted directly as the probability of remaining tau-negative at a given age.
+
+**Two approaches to handle study entry age are shown in parallel:**
+
+1. **Standard** (`Surv(age_last, event)`): treats all participants as entering the risk set at age 0 but can introduce left-truncation bias since participants enroll at different ages.
+2. **Left-truncated** (`Surv(age_first, age_last, event)`): counting-process / delayed-entry form. Only the time on study contributes to the risk interval, correcting for differential study entry ages while preserving age as the interpretable time scale. 
+
+**Biomarkers:**
+
+- p-tau181
+- p-tau217
+
+**Predictors:**
+
+- **CogDrisk risk score** (composite: family history + APOE + CogDrisk burden + GRS burden)
+- **LIBRA2 risk score** (composite: family history + APOE + LIBRA2 burden + GRS burden)
+- Individual components: APOE ε4 status, family history, GRS (continuous), CogDrisk (continuous), LIBRA2 (continuous)
+
+```{r packages}
+library(survival)
+library(survminer)
+library(patchwork)
+library(gt)
+library(broom)
+
+source('workflow/scripts/config.R')
+```
+
+## Load and Prepare Data
+
+```{r load-data}
+# Load SILA individual fits (from PREVENT-AD_SILA.qmd).
+# Biomarker positivity thresholds were derived via Youden index ROC analysis in
+# PREVENT-AD_PET.qmd and applied within SILA:
+#   p-tau181: 6.42 pg/mL
+#   p-tau217: 3.06 pg/mL
+# The SILA output column estdtt0 encodes time to that threshold, so event/
+# censoring is defined entirely from SILA estimates — no PET data needed here.
+sila_fits <- read_csv(
+  here("results", "Aim1", "tables", "PREVENTAD_SILA_individual_fits.csv"),
+  show_col_types = FALSE
+)
+
+# Load baseline predictors
+baseline_dat <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_baseline.rds"))
+all_dat      <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_longitudinal.rds"))
+
+cat("SILA fits loaded:", nrow(sila_fits), "observations across",
+    n_distinct(sila_fits$subid), "participants\n")
+cat("Biomarkers:", paste(unique(sila_fits$biomarker), collapse = ", "), "\n")
+```
+
+```{r derive-survival-data}
+# For each participant × biomarker, extract the first and last observation rows.
+# Key columns used:
+#   val    = last observed biomarker value (event indicator)
+#   valt0  = biomarker positivity threshold (Youden cutoff from PET analysis)
+#   age_first = age at first biomarker measurement (study entry; left-truncation time)
+#   age_last  = age at last biomarker measurement  (exit time / survival time)
+# NOTE: aevent is "last" for every row (just a SILA row-type label, not an event
+# indicator). estdtt0 is time to threshold from ageref, not from the last visit,
+# so estdtt0 <= 0 does not reliably indicate threshold crossing.
+
+# First observation per participant × biomarker (study entry age)
+sila_first <- sila_fits %>%
+  group_by(subid, biomarker) %>%
+  slice_min(age, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  rename(CONP_ID = subid, age_first = age) %>%
+  select(CONP_ID, biomarker, age_first)
+
+# Last observation per participant × biomarker (exit age + event info)
+sila_last <- sila_fits %>%
+  group_by(subid, biomarker) %>%
+  slice_max(age, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  rename(CONP_ID = subid, age_last = age) %>%
+  left_join(sila_first, by = c("CONP_ID", "biomarker"))
+
+cat("Participants per biomarker (last observation):\n")
+sila_last %>%
+  count(biomarker) %>%
+  print()
+
+cat("\nAge range at first observation (study entry):\n")
+sila_last %>%
+  group_by(biomarker) %>%
+  summarise(
+    min_entry = round(min(age_first, na.rm = TRUE), 1),
+    mean_entry = round(mean(age_first, na.rm = TRUE), 1),
+    max_entry  = round(max(age_first, na.rm = TRUE), 1),
+    .groups = "drop"
+  ) %>%
+  print()
+```
+
+```{r create-risk-burden}
+# Calculate baseline cutoffs from longitudinal data (to avoid data leakage)
+baseline_only <- all_dat %>%
+  group_by(CONP_ID) %>%
+  slice_min(years, n = 1) %>%
+  ungroup()
+
+cogdrisk_cutoff_1sd <- mean(baseline_only$score_cogd, na.rm = TRUE) +
+                       sd(baseline_only$score_cogd, na.rm = TRUE)
+libra2_cutoff_1sd   <- mean(baseline_only$score_libra2, na.rm = TRUE) +
+                       sd(baseline_only$score_libra2, na.rm = TRUE)
+
+cat("CogDrisk 1 SD cutoff:", round(cogdrisk_cutoff_1sd, 2), "\n")
+cat("LIBRA2 1 SD cutoff:",   round(libra2_cutoff_1sd, 2), "\n")
+
+# Build predictor dataset with risk burden composites
+predictors_cox <- baseline_dat %>%
+  mutate(
+    grs_quartile       = ntile(GRS, 4),
+    grs_burden         = if_else(grs_quartile == 4, 1L, 0L),
+    fhx_burden         = case_when(str_detect(family_history, "2\\+") ~ 1L, TRUE ~ 0L),
+    apoe_burden        = if_else(apoe == "e4+", 1L, 0L),
+    cogdrisk_burden    = if_else(score_cogd > cogdrisk_cutoff_1sd, 1L, 0L),
+    libra2_burden      = if_else(score_libra2 > libra2_cutoff_1sd, 1L, 0L),
+    risk_score_cogd    = fhx_burden + apoe_burden + cogdrisk_burden + grs_burden,
+    risk_score_libra2  = fhx_burden + apoe_burden + libra2_burden   + grs_burden,
+  ) %>%
+  select(CONP_ID, age, sex, educ, apoe, apoe_burden, family_history, fhx_burden,
+         GRS, grs_burden, score_cogd, cogdrisk_burden,
+         score_libra2, libra2_burden,
+         risk_score_cogd, risk_score_libra2)
+```
+
+```{r build-cox-data}
+# Join SILA outcomes with predictors
+cox_data_full <- sila_last %>%
+  left_join(predictors_cox, by = "CONP_ID") %>%
+  mutate(
+    # Event: last observed biomarker value (val) >= positivity threshold (valt0)
+    # Entry time (left-truncation): age at first biomarker observation (age_first)
+    # Survival time (exit):
+    #   Event (estaget0): SILA-estimated age at threshold crossing
+    #   Censor to age_last: truncate at age of last observed biomarker visit
+    #              (do not extrapolate SILA's predicted future onset for negatives)
+    event    = if_else(val >= valt0, 1L, 0L),
+    surv_age = if_else(val >= valt0 & !is.na(estaget0), estaget0, age_last)
+  )
+
+cat("\nCox survival data summary:\n")
+cox_data_full %>%
+  group_by(biomarker) %>%
+  summarise(
+    n            = n(),
+    n_events     = sum(event),
+    pct_events   = round(mean(event) * 100, 1),
+    median_age   = round(median(surv_age, na.rm = TRUE), 1),
+    mean_followup = round(mean(surv_age - age_first, na.rm = TRUE), 1),
+    .groups = "drop"
+  ) %>%
+  print()
+```
+
+## Kaplan-Meier Survival Curves
+
+```{r km-curves}
+#| fig-width: 14
+#| fig-height: 6
+
+plot_km <- function(data, biomarker_label, group_var, group_label,
+                    palette = c("#2166AC", "#B2182B", "#4DAC26", "#D01C8B")) {
+
+  # ggsurvplot has scoping issues with dynamically-built formulae inside
+  # functions; use broom::tidy + ggplot2 instead
+  km_formula <- as.formula(paste("Surv(surv_age, event) ~", group_var))
+  km_fit     <- survfit(km_formula, data = data)
+
+  km_tidy <- broom::tidy(km_fit) %>%
+    mutate(strata = gsub(paste0("^", group_var, "="), "", strata))
+
+  # log-rank p-value via base R survdiff (avoids ggsurvplot/survminer scoping issues)
+  sd_fit  <- survdiff(km_formula, data = data)
+  lr_p    <- pchisq(sd_fit$chisq, df = length(sd_fit$n) - 1, lower.tail = FALSE)
+  pval_label <- if (lr_p < 0.001) "p < 0.001" else paste0("p = ", round(lr_p, 3))
+
+  ggplot(km_tidy, aes(x = time, y = estimate, colour = strata, fill = strata)) +
+    geom_step(linewidth = 0.8) +
+    geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.15, colour = NA) +
+    scale_colour_manual(values = palette, name = group_label) +
+    scale_fill_manual(values = palette,   name = group_label) +
+    annotate("text", x = Inf, y = Inf, hjust = 1.05, vjust = 1.5,
+             label = pval_label, size = 3.5) +
+    labs(
+      title = paste(biomarker_label, "\u2013", group_label),
+      x     = "Age (years)",
+      y     = "Probability of Amyloid Negativity"
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(legend.position = "bottom")
+}
+
+# Split data by biomarker
+cox_ptau181 <- cox_data_full %>% filter(biomarker == "ptau181") %>% drop_na(surv_age, event)
+cox_ptau217 <- cox_data_full %>% filter(biomarker == "ptau217") %>% drop_na(surv_age, event)
+
+# KM by APOE status
+km_181_apoe <- plot_km(cox_ptau181, "p-tau181", "apoe_burden", "APOE ε4")
+km_217_apoe <- plot_km(cox_ptau217, "p-tau217", "apoe_burden", "APOE ε4")
+
+print(km_181_apoe)
+print(km_217_apoe)
+```
+
+```{r km-risk-score}
+#| fig-width: 14
+#| fig-height: 10
+
+# Collapse top level to "3+" because only 1 participant has score = 4,
+# which is too sparse for survfit to estimate a curve
+collapse_risk <- function(x) {
+  factor(if_else(x >= 3, "3+", as.character(x)), levels = c("0", "1", "2", "3+"))
+}
+
+cox_ptau181 <- cox_ptau181 %>%
+  mutate(
+    risk_score_cogd_f   = collapse_risk(risk_score_cogd),
+    risk_score_libra2_f = collapse_risk(risk_score_libra2)
+  )
+
+cox_ptau217 <- cox_ptau217 %>%
+  mutate(
+    risk_score_cogd_f   = collapse_risk(risk_score_cogd),
+    risk_score_libra2_f = collapse_risk(risk_score_libra2)
+  )
+
+# 4-colour palette for 0, 1, 2, 3+ risk indicators
+palette_5 <- c("0" = "#2166AC", "1" = "#74ADD1", "2" = "#F46D43", "3+" = "#B2182B")
+
+km_181_cogd   <- plot_km(cox_ptau181, "p-tau181", "risk_score_cogd_f",
+                          "# of risk indicators (CogDrisk model)", palette = palette_5)
+km_181_libra2 <- plot_km(cox_ptau181, "p-tau181", "risk_score_libra2_f",
+                          "# of risk indicators (LIBRA2 model)",   palette = palette_5)
+km_217_cogd   <- plot_km(cox_ptau217, "p-tau217", "risk_score_cogd_f",
+                          "# of risk indicators (CogDrisk model)", palette = palette_5)
+km_217_libra2 <- plot_km(cox_ptau217, "p-tau217", "risk_score_libra2_f",
+                          "# of risk indicators (LIBRA2 model)",   palette = palette_5)
+
+# 2×2 layout: rows = biomarker, cols = score type
+combined <- (km_181_cogd | km_181_libra2) /
+(km_217_cogd | km_217_libra2) +
+  plot_annotation(
+    title = "Kaplan-Meier Curves: Probability of Amyloid Negativity by Composite Risk Score",
+    theme = theme(plot.title = element_text(face = "bold", size = 14, hjust = 0.5))
+  )
+
+ggsave(file.path(AIM2_OUTPUT_PATH$figures, "1PREVENTAD_combined_plot.png"), combined, width = 14, height = 10, dpi = 300)
+
+```
+
+## Cox Proportional Hazards Models
+
+### Model Specifications
+
+Models are fit separately for each biomarker (p-tau181, p-tau217).
+
+All models use **age** as the time scale, so hazard ratios can be interpreted as the instantaneous probability of crossing the tau positivity threshold at a given age. CogDrisk models are **not** adjusted for age, sex, or education because these are already incorporated into the CogDrisk score itself — adjusting for them would introduce overadjustment. LIBRA2 models **are** adjusted for age, sex, and education because LIBRA2 does not include them.
+
+**Two survival approaches are shown in parallel:**
+
+- **Standard** (`Surv(age_last, event)`): uses age at last observation as the sole time point. Conceptually treats all participants as entering the risk set at age 0. Older enrollees who have not yet converted accumulate more "survival time" before the study, inflating their apparent time at risk.
+- **Left-truncated** (`Surv(age_first, age_last, event)`): counting-process (delayed-entry) form. Only the time *on study* (first to last biomarker measurement) contributes to each participant's risk interval. This corrects for left-truncation bias while preserving age as the interpretable time scale.
+
+**Models (M1–M4 + sensitivity M3s):**
+
+- **M1**: Composite CogDrisk risk score (continuous, 0–4), unadjusted
+- **M2**: Composite LIBRA2 risk score (continuous, 0–4) + age + sex + education
+- **M3**: Individual binary CogDrisk components — APOE ε4, family history (2+ FDR), GRS burden (top quartile). *CogDrisk burden (>1 SD) is excluded from the primary model because the CogDrisk score already embeds age as a component, creating collinearity with the age-based time scale and biasing the HR downward.*
+- **M3s** *(sensitivity)*: Same as M3 but including CogDrisk burden — presented for transparency, interpret with caution given age collinearity.
+- **M4**: Individual binary LIBRA2 components — APOE ε4, family history (2+ FDR), GRS burden (top quartile), LIBRA2 burden (>1 SD) + age + sex + education
+- **M5C**: CogDrisk and GRS as continuous predictors
+- **M5L**: LIBRA2 and GRS as continuous predictors
+
+```{r fit-cox-models}
+fit_cox_models <- function(data) {
+
+  # Drop rows missing any key variable (applied uniformly across all models)
+  dat <- data %>%
+    drop_na(surv_age, age_first, event, sex, educ, apoe_burden, fhx_burden,
+            GRS, grs_burden, score_cogd, cogdrisk_burden, score_libra2, libra2_burden,
+            risk_score_cogd, risk_score_libra2)
+
+  # Two survival objects:
+  surv_std <- Surv(dat$surv_age, dat$event)
+  surv_lt  <- Surv(dat$age_first, dat$surv_age, dat$event)
+
+  list(
+    # ── Standard approach (no left-truncation correction) ────────────────────
+    # M1: CogDrisk composite (no age/sex — already embedded in CogDrisk score)
+    m1_std  = coxph(surv_std ~ risk_score_cogd,
+                    data = dat, ties = "efron"),
+    # M2: LIBRA2 composite + age + sex (LIBRA2 does not embed these covariates)
+    m2_std  = coxph(surv_std ~ age_last + sex + educ + risk_score_libra2,
+                    data = dat, ties = "efron"),
+    # M3 primary: individual CogDrisk components excluding cogdrisk_burden
+    #   (cogdrisk_burden is excluded because the CogDrisk score already
+    #    incorporates age; including it alongside the age-derived time scale
+    #    creates collinearity and biases the HR downward)
+    m3_std  = coxph(surv_std ~ apoe_burden + fhx_burden + grs_burden,
+                    data = dat, ties = "efron"),
+    # M3 sensitivity: same as M3 but with cogdrisk_burden included (for
+    #   transparency; interpret with caution given age collinearity)
+    m3s_std = coxph(surv_std ~ apoe_burden + fhx_burden + grs_burden +
+                               cogdrisk_burden,
+                    data = dat, ties = "efron"),
+    # M4: individual LIBRA2 components + age + sex
+    m4_std  = coxph(surv_std ~ age_last + sex + educ + apoe_burden + fhx_burden +
+                               grs_burden + libra2_burden,
+                    data = dat, ties = "efron"),
+
+    # ── Left-truncated approach (age_first as study entry time) ───────────────
+    m1_lt   = coxph(surv_lt ~ risk_score_cogd,
+                    data = dat, ties = "efron"),
+    m2_lt   = coxph(surv_lt ~ age_last + sex + educ + risk_score_libra2,
+                    data = dat, ties = "efron"),
+    m3_lt   = coxph(surv_lt ~ apoe_burden + fhx_burden + grs_burden,
+                    data = dat, ties = "efron"),
+    m3s_lt  = coxph(surv_lt ~ apoe_burden + fhx_burden + grs_burden +
+                               cogdrisk_burden,
+                    data = dat, ties = "efron"),
+    m4_lt   = coxph(surv_lt ~ age_last + sex + educ + apoe_burden + fhx_burden +
+                               grs_burden + libra2_burden,
+                    data = dat, ties = "efron"),
+
+    # ── M5C / M5L: continuous risk score + continuous GRS ─────────────────────
+    # M5C: CogDrisk (continuous) + GRS (continuous) + categorical APOE ε4 + fhx
+    #   (not adjusted for age/sex/educ — these are embedded in CogDrisk scoring)
+    m5c_std = coxph(surv_std ~ apoe_burden + fhx_burden + GRS + score_cogd,
+                    data = dat, ties = "efron"),
+    # M5L: LIBRA2 (continuous) + GRS (continuous) + categorical APOE ε4 + fhx
+    #   + age + sex + educ (LIBRA2 does not embed these covariates)
+    m5l_std = coxph(surv_std ~ age_last + sex + educ + apoe_burden + fhx_burden +
+                               GRS + score_libra2,
+                    data = dat, ties = "efron"),
+    m5c_lt  = coxph(surv_lt ~ apoe_burden + fhx_burden + GRS + score_cogd,
+                    data = dat, ties = "efron"),
+    m5l_lt  = coxph(surv_lt ~ age_last + sex + educ + apoe_burden + fhx_burden +
+                               GRS + score_libra2,
+                    data = dat, ties = "efron")
+  )
+}
+
+models_ptau181 <- fit_cox_models(cox_ptau181)
+models_ptau217 <- fit_cox_models(cox_ptau217)
+```
+
+```{r extract-cox-results}
+# Helper: tidy a Cox model into HR table
+# truncation_label: "Standard" or "Left-truncated"
+# sensitivity_flag: TRUE for M3s models (cogdrisk_burden included)
+tidy_cox <- function(model, biomarker_label, model_label,
+                     truncation_label, sensitivity_flag = FALSE) {
+  tidy(model, exponentiate = TRUE, conf.int = TRUE) %>%
+    mutate(
+      biomarker   = biomarker_label,
+      model       = model_label,
+      truncation  = truncation_label,
+      sensitivity = sensitivity_flag,
+      p_value     = p.value,
+      sig         = case_when(
+        p.value < 0.001 ~ "***",
+        p.value < 0.01  ~ "**",
+        p.value < 0.05  ~ "*",
+        p.value < 0.10  ~ ".",
+        TRUE            ~ ""
+      )
+    ) %>%
+    select(biomarker, model, truncation, sensitivity,
+           term, HR = estimate, conf.low, conf.high, p_value, sig)
+}
+
+# ── p-tau181 ─────────────────────────────────────────────────────────────────
+results_ptau181 <- bind_rows(
+  # Standard
+  tidy_cox(models_ptau181$m1_std,  "p-tau181", "M1: CogDrisk Composite",   "Standard"),
+  tidy_cox(models_ptau181$m2_std,  "p-tau181", "M2: LIBRA2 Composite",     "Standard"),
+  tidy_cox(models_ptau181$m3_std,  "p-tau181", "M3: CogDrisk Components",  "Standard"),
+  tidy_cox(models_ptau181$m3s_std, "p-tau181", "M3s: CogDrisk Components (sensitivity)", "Standard",  TRUE),
+  tidy_cox(models_ptau181$m4_std,  "p-tau181", "M4: LIBRA2 Components",    "Standard"),
+  tidy_cox(models_ptau181$m5c_std, "p-tau181", "M5C: CogDrisk + GRS Continuous", "Standard"),
+  tidy_cox(models_ptau181$m5l_std, "p-tau181", "M5L: LIBRA2 + GRS Continuous",   "Standard"),
+  # Left-truncated
+  tidy_cox(models_ptau181$m1_lt,   "p-tau181", "M1: CogDrisk Composite",   "Left-truncated"),
+  tidy_cox(models_ptau181$m2_lt,   "p-tau181", "M2: LIBRA2 Composite",     "Left-truncated"),
+  tidy_cox(models_ptau181$m3_lt,   "p-tau181", "M3: CogDrisk Components",  "Left-truncated"),
+  tidy_cox(models_ptau181$m3s_lt,  "p-tau181", "M3s: CogDrisk Components (sensitivity)", "Left-truncated", TRUE),
+  tidy_cox(models_ptau181$m4_lt,   "p-tau181", "M4: LIBRA2 Components",    "Left-truncated"),
+  tidy_cox(models_ptau181$m5c_lt,  "p-tau181", "M5C: CogDrisk + GRS Continuous", "Left-truncated"),
+  tidy_cox(models_ptau181$m5l_lt,  "p-tau181", "M5L: LIBRA2 + GRS Continuous",   "Left-truncated")
+)
+
+# ── p-tau217 ─────────────────────────────────────────────────────────────────
+results_ptau217 <- bind_rows(
+  tidy_cox(models_ptau217$m1_std,  "p-tau217", "M1: CogDrisk Composite",   "Standard"),
+  tidy_cox(models_ptau217$m2_std,  "p-tau217", "M2: LIBRA2 Composite",     "Standard"),
+  tidy_cox(models_ptau217$m3_std,  "p-tau217", "M3: CogDrisk Components",  "Standard"),
+  tidy_cox(models_ptau217$m3s_std, "p-tau217", "M3s: CogDrisk Components (sensitivity)", "Standard",  TRUE),
+  tidy_cox(models_ptau217$m4_std,  "p-tau217", "M4: LIBRA2 Components",    "Standard"),
+  tidy_cox(models_ptau217$m5c_std, "p-tau217", "M5C: CogDrisk + GRS Continuous", "Standard"),
+  tidy_cox(models_ptau217$m5l_std, "p-tau217", "M5L: LIBRA2 + GRS Continuous",   "Standard"),
+  tidy_cox(models_ptau217$m1_lt,   "p-tau217", "M1: CogDrisk Composite",   "Left-truncated"),
+  tidy_cox(models_ptau217$m2_lt,   "p-tau217", "M2: LIBRA2 Composite",     "Left-truncated"),
+  tidy_cox(models_ptau217$m3_lt,   "p-tau217", "M3: CogDrisk Components",  "Left-truncated"),
+  tidy_cox(models_ptau217$m3s_lt,  "p-tau217", "M3s: CogDrisk Components (sensitivity)", "Left-truncated", TRUE),
+  tidy_cox(models_ptau217$m4_lt,   "p-tau217", "M4: LIBRA2 Components",    "Left-truncated"),
+  tidy_cox(models_ptau217$m5c_lt,  "p-tau217", "M5C: CogDrisk + GRS Continuous", "Left-truncated"),
+  tidy_cox(models_ptau217$m5l_lt,  "p-tau217", "M5L: LIBRA2 + GRS Continuous",   "Left-truncated")
+)
+
+all_results <- bind_rows(results_ptau181, results_ptau217)
+```
+
+### Results: p-tau181
+
+```{r table-ptau181}
+# Helper to format a single results table (one biomarker, both truncation types,
+# primary models only — M3s sensitivity shown separately below)
+make_results_table <- function(results_df, biomarker_label) {
+
+  # Primary models only (exclude sensitivity M3s and M5C/M5L — displayed separately)
+  primary <- results_df %>%
+    filter(!sensitivity, !str_detect(model, "^M5"), !term %in% c("age_last", "sex")) %>%
+    mutate(
+      hr_fmt = sprintf("%.2f (%.2f\u2013%.2f)%s", HR, conf.low, conf.high, sig),
+      p_fmt  = format.pval(p_value, digits = 3, eps = 0.001)
+    )
+
+  # Pivot wide: Standard | Left-truncated columns side-by-side
+  wide <- primary %>%
+    select(model, term, truncation, hr_fmt, p_fmt) %>%
+    pivot_wider(
+      names_from   = truncation,
+      values_from  = c(hr_fmt, p_fmt),
+      names_glue   = "{truncation}_{.value}"
+    ) %>%
+    rename(
+      Model                  = model,
+      Term                   = term,
+      `Standard HR (95% CI)` = `Standard_hr_fmt`,
+      `Standard p`           = `Standard_p_fmt`,
+      `LT HR (95% CI)`       = `Left-truncated_hr_fmt`,
+      `LT p`                 = `Left-truncated_p_fmt`
+    )
+
+  wide %>%
+    gt() %>%
+    tab_header(
+      title    = paste("Cox Models:", biomarker_label, "Time to Threshold"),
+      subtitle = "Hazard Ratios (95% CI) — Standard vs Left-truncated (LT)"
+    ) %>%
+    tab_spanner(
+      label   = "Standard (Surv(age_last, event))",
+      columns = c(`Standard HR (95% CI)`, `Standard p`)
+    ) %>%
+    tab_spanner(
+      label   = "Left-truncated (Surv(age_first, age_last, event))",
+      columns = c(`LT HR (95% CI)`, `LT p`)
+    ) %>%
+    tab_style(
+      style     = cell_text(weight = "bold"),
+      locations = cells_column_labels()
+    ) %>%
+    tab_footnote(
+      footnote = paste(
+        "HR > 1 indicates faster tau positivity onset (earlier age).",
+        "M3 excludes CogDrisk burden (age collinearity); see M3s sensitivity table.",
+        "* p<0.05; ** p<0.01; *** p<0.001"
+      ),
+      locations = cells_title()
+    )
+}
+
+make_m5_table <- function(results_df, biomarker_label) {
+  # Rename terms for readability
+  term_labels <- c(
+    apoe_burden  = "APOE \u03b54 (categorical)",
+    fhx_burden   = "Family history \u22652 FDR (categorical)",
+    GRS          = "GRS (continuous)",
+    score_cogd   = "CogDrisk score (continuous)",
+    score_libra2 = "LIBRA2 score (continuous)"
+  )
+
+  m5_res <- results_df %>%
+    filter(str_detect(model, "^M5"), !term %in% c("age_last", "sex", "educ")) %>%
+    mutate(
+      term   = recode(term, !!!term_labels),
+      hr_fmt = sprintf("%.2f (%.2f\u2013%.2f)%s", HR, conf.low, conf.high, sig),
+      p_fmt  = format.pval(p_value, digits = 3, eps = 0.001)
+    )
+
+  wide <- m5_res %>%
+    select(model, term, truncation, hr_fmt, p_fmt) %>%
+    pivot_wider(
+      names_from  = truncation,
+      values_from = c(hr_fmt, p_fmt),
+      names_glue  = "{truncation}_{.value}"
+    ) %>%
+    rename(
+      Model                  = model,
+      Term                   = term,
+      `Standard HR (95% CI)` = `Standard_hr_fmt`,
+      `Standard p`           = `Standard_p_fmt`,
+      `LT HR (95% CI)`       = `Left-truncated_hr_fmt`,
+      `LT p`                 = `Left-truncated_p_fmt`
+    )
+
+  wide %>%
+    gt() %>%
+    tab_header(
+      title    = paste("M5C / M5L:", biomarker_label, "\u2014 Continuous Risk Scores"),
+      subtitle = "CogDrisk/LIBRA2 and GRS as continuous predictors; APOE \u03b54 and family history categorical"
+    ) %>%
+    tab_spanner(
+      label   = "Standard (Surv(age_last, event))",
+      columns = c(`Standard HR (95% CI)`, `Standard p`)
+    ) %>%
+    tab_spanner(
+      label   = "Left-truncated (Surv(age_first, age_last, event))",
+      columns = c(`LT HR (95% CI)`, `LT p`)
+    ) %>%
+    tab_style(
+      style     = cell_text(weight = "bold"),
+      locations = cells_column_labels()
+    ) %>%
+    tab_footnote(
+      footnote = paste(
+        "M5C: CogDrisk (continuous) + GRS (continuous) + APOE \u03b54 + family history; not adjusted for age/sex/educ (embedded in CogDrisk).",
+        "M5L: LIBRA2 (continuous) + GRS (continuous) + APOE \u03b54 + family history + age + sex + educ.",
+        "Adjustment covariates (age, sex, educ) omitted from table.",
+        "* p<0.05; ** p<0.01; *** p<0.001"
+      ),
+      locations = cells_title()
+    )
+}
+
+make_results_table(results_ptau181, "p-tau181")
+```
+
+```{r table-ptau181-sensitivity}
+# Sensitivity table: M3s (with cogdrisk_burden) for both truncation approaches
+results_ptau181 %>%
+  filter(sensitivity, !term %in% c("age_last", "sex")) %>%
+  mutate(
+    hr_fmt = sprintf("%.2f (%.2f\u2013%.2f)%s", HR, conf.low, conf.high, sig),
+    p_fmt  = format.pval(p_value, digits = 3, eps = 0.001)
+  ) %>%
+  select(truncation, term, hr_fmt, p_fmt) %>%
+  pivot_wider(
+    names_from  = truncation,
+    values_from = c(hr_fmt, p_fmt),
+    names_glue  = "{truncation}_{.value}"
+  ) %>%
+  rename(
+    Term                   = term,
+    `Standard HR (95% CI)` = `Standard_hr_fmt`,
+    `Standard p`           = `Standard_p_fmt`,
+    `LT HR (95% CI)`       = `Left-truncated_hr_fmt`,
+    `LT p`                 = `Left-truncated_p_fmt`
+  ) %>%
+  gt() %>%
+  tab_header(
+    title    = "p-tau181 — Sensitivity: M3s with CogDrisk Burden",
+    subtitle  = "CogDrisk burden included alongside other components (interpret with caution)"
+  ) %>%
+  tab_spanner(
+    label   = "Standard",
+    columns = c(`Standard HR (95% CI)`, `Standard p`)
+  ) %>%
+  tab_spanner(
+    label   = "Left-truncated",
+    columns = c(`LT HR (95% CI)`, `LT p`)
+  ) %>%
+  tab_style(
+    style     = cell_text(weight = "bold"),
+    locations = cells_column_labels()
+  ) %>%
+  tab_footnote(
+    footnote = "CogDrisk burden is collinear with age (age is embedded in CogDrisk scoring); HR may be attenuated. * p<0.05; ** p<0.01; *** p<0.001",
+    locations = cells_title()
+  )
+```
+
+```{r table-ptau181-m5}
+make_m5_table(results_ptau181, "p-tau181")
+```
+
+
+### Results: p-tau217
+
+```{r table-ptau217}
+make_results_table(results_ptau217, "p-tau217")
+```
+
+```{r table-ptau217-sensitivity}
+results_ptau217 %>%
+  filter(sensitivity, !term %in% c("age_last", "sex")) %>%
+  mutate(
+    hr_fmt = sprintf("%.2f (%.2f\u2013%.2f)%s", HR, conf.low, conf.high, sig),
+    p_fmt  = format.pval(p_value, digits = 3, eps = 0.001)
+  ) %>%
+  select(truncation, term, hr_fmt, p_fmt) %>%
+  pivot_wider(
+    names_from  = truncation,
+    values_from = c(hr_fmt, p_fmt),
+    names_glue  = "{truncation}_{.value}"
+  ) %>%
+  rename(
+    Term                   = term,
+    `Standard HR (95% CI)` = `Standard_hr_fmt`,
+    `Standard p`           = `Standard_p_fmt`,
+    `LT HR (95% CI)`       = `Left-truncated_hr_fmt`,
+    `LT p`                 = `Left-truncated_p_fmt`
+  ) %>%
+  gt() %>%
+  tab_header(
+    title    = "p-tau217 — Sensitivity: M3s with CogDrisk Burden",
+    subtitle  = "CogDrisk burden included alongside other components (interpret with caution)"
+  ) %>%
+  tab_spanner(
+    label   = "Standard",
+    columns = c(`Standard HR (95% CI)`, `Standard p`)
+  ) %>%
+  tab_spanner(
+    label   = "Left-truncated",
+    columns = c(`LT HR (95% CI)`, `LT p`)
+  ) %>%
+  tab_style(
+    style     = cell_text(weight = "bold"),
+    locations = cells_column_labels()
+  ) %>%
+  tab_footnote(
+    footnote = "CogDrisk burden is collinear with age (age is embedded in CogDrisk scoring); HR may be attenuated. * p<0.05; ** p<0.01; *** p<0.001",
+    locations = cells_title()
+  )
+```
+
+```{r table-ptau217-m5}
+make_m5_table(results_ptau217, "p-tau217")
+```
+
+## Forest Plots
+
+```{r forest-plot-composite}
+#| fig-width: 12
+#| fig-height: 6
+
+# Focus on composite risk score terms — primary models only, both truncation approaches
+forest_composite <- all_results %>%
+  filter(term %in% c("risk_score_cogd", "risk_score_libra2"),
+         !sensitivity) %>%
+  mutate(
+    term_label = case_when(
+      term == "risk_score_cogd"   ~ "CogDrisk Composite (0\u20134)",
+      term == "risk_score_libra2" ~ "LIBRA2 Composite (0\u20134)"
+    ),
+    biomarker  = factor(biomarker,  levels = c("p-tau181", "p-tau217")),
+    truncation = factor(truncation, levels = c("Standard", "Left-truncated"))
+  )
+
+ggplot(forest_composite, aes(x = HR, y = term_label, colour = biomarker)) +
+  geom_vline(xintercept = 1, linetype = "dashed", colour = "grey50") +
+  geom_point(position = position_dodge(width = 0.5), size = 3) +
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high),
+                 height = 0.15,
+                 position = position_dodge(width = 0.5)) +
+  scale_colour_manual(values = c("p-tau181" = "#2166AC", "p-tau217" = "#B2182B")) +
+  facet_wrap(~ truncation, ncol = 2) +
+  labs(
+    title   = "Composite Risk Score: HR for Earlier Tau Positivity Onset",
+    subtitle = "Left panel: standard approach; Right panel: left-truncated (preferred)",
+    x       = "Hazard Ratio (95% CI)",
+    y       = NULL,
+    colour  = "Biomarker"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "bottom",
+        strip.text = element_text(face = "bold"))
+```
+
+
+## Save Results
+
+```{r save-results}
+# Create output directories if needed
+dir.create(here("results", "Aim2", "tables"),  recursive = TRUE, showWarnings = FALSE)
+dir.create(here("results", "Aim2", "figures"), recursive = TRUE, showWarnings = FALSE)
+
+# Save full results (all truncation approaches + sensitivity models)
+write_csv(all_results,
+          here("results", "Aim2", "tables", "PREVENTAD_cox_sila_results.csv"))
+
+# Save primary results only (left-truncated, no sensitivity)
+all_results %>%
+  filter(truncation == "Left-truncated", !sensitivity) %>%
+  write_csv(here("results", "Aim2", "tables", "PREVENTAD_cox_sila_results_primary.csv"))
+
+cat("Results saved to:\n")
+cat("- results/Aim2/tables/PREVENTAD_cox_sila_results.csv (all models)\n")
+cat("- results/Aim2/tables/PREVENTAD_cox_sila_results_primary.csv (left-truncated primary only)\n")
+```

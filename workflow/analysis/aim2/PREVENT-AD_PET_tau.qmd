@@ -1,0 +1,441 @@
+---
+title: "Aim 2: Predicting Tau PET Positivity from Plasma Biomarkers"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: true
+    code-summary: "Show code"
+execute:
+  warning: false
+  message: false
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+knitr::opts_knit$set(root.dir = here::here())
+```
+
+
+```{r loading}
+library(pROC)
+
+# Load configuration
+source('workflow/scripts/config.R')
+```
+
+## Overview
+
+This analysis predicts amyloid and tau PET positivity from plasma biomarkers (ptau181, ptau217) using logistic regression. We calculate:
+
+- ROC curves and AUC
+- Optimal cutoffs using Youden index (sensitivity + specificity - 1)
+- Sensitivity and specificity at optimal cutoffs
+
+**Tau positivity thresholds: (PREVENT-AD cohort-specific)**
+
+- Tau: SUVR ≥ 1.28
+
+## Load and Prepare Data
+
+### Load Pre-Processed Biomarker Data
+
+Using biomarker data already filtered by inclusion criteria (02_clean_PREVENT-AD.R):
+
+- CONP_ID with GWAS data
+- CONP_ID with at least 2 biomarker visits
+
+```{r load-biomarkers-processed}
+# Load pre-processed biomarker data (already filtered by inclusion criteria)
+biomarkers <- readRDS(here("data", "intermediate", "PREVENTAD_biomarkers.rds"))
+
+# Load demographics for covariates (Sex, BMI)
+# demographics <- readRDS(here("data", "intermediate", "PREVENTAD_demographics.rds"))
+crs_factors <- readRDS(here("data", "intermediate", "PREVENTAD_crsfactors_imputed.rds")) %>%
+  select(CONP_ID, Sex, Age, Weight, Height) %>%
+  mutate(BMI = Weight / (Height / 100)^2) %>%
+  select(CONP_ID, BMI, Sex, Age)
+
+# Get list of participants meeting inclusion criteria
+criteria_met <- biomarkers %>%
+  distinct(CONP_ID)
+
+cat("=== INCLUSION CRITERIA (from pre-processed data) ===\n")
+cat("Participants meeting criteria:", nrow(criteria_met), "\n")
+cat("Total biomarker observations:", nrow(biomarkers), "\n")
+```
+
+### Load PET Data
+
+```{r load-pet}
+# Load raw PET data
+pet_ftp <- read_csv(
+  file.path(PREVENTAD_DATA_PATH,
+            "PET_FTP_SUVR_ref-infCerebellarGray_Registered_PREVENTAD_2024-08-01.csv"),
+  show_col_types = FALSE
+)
+pet_info <- read_csv(
+  file.path(PREVENTAD_DATA_PATH,
+            "PET_info_participants_Registered_PREVENTAD_2024-08-01.csv"),
+  show_col_types = FALSE
+)
+
+# Process PET data - apply inclusion criteria
+pet_tau <- pet_ftp %>%
+  filter(CONP_ID %in% criteria_met$CONP_ID) %>%
+  select(CONP_ID, SUVR=`meta-roi_SUVR`) 
+
+# Get PET dates
+pet_tau_dates <- pet_info %>%
+  filter(PET_tracer == "FTP") %>%
+  select(CONP_ID, Date_PET_visit, Age_PET_visit) %>%
+  distinct() %>%
+  rename(
+    pet_date = Date_PET_visit,
+    age_at_pet = Age_PET_visit
+  )
+
+pet_tau <- pet_tau %>%
+  left_join(pet_tau_dates, by = c("CONP_ID"))
+
+# PREVENT-AD positivity thresholds
+SUVR_THRESHOLD <- 1.28
+
+pet_tau <- pet_tau %>%
+  mutate(
+    tau_positive = as.integer(SUVR >= SUVR_THRESHOLD),
+    tau_status = factor(
+      ifelse(SUVR >= SUVR_THRESHOLD, "T+", "T-"),
+      levels = c("T-", "T+")
+    )
+  )
+
+cat("PET participants:", n_distinct(pet_tau$CONP_ID), "\n")
+cat("Tau positive:", sum(pet_tau$tau_positive),
+    "(", round(mean(pet_tau$tau_positive) * 100, 1), "%)\n")
+```
+
+### Match PET with Closest Biomarker Timepoint
+```{r prepare-biomarkers}
+# Extract ptau181 data from pre-processed biomarkers
+biomarkers_ptau181 <- biomarkers %>%
+  filter(!is.na(ptau181)) %>%
+  select(CONP_ID, biomarker_visit = Visit_label, biomarker_date = Date_taken, ptau181)
+
+# Extract ptau217 data from pre-processed biomarkers
+biomarkers_ptau217 <- biomarkers %>%
+  filter(!is.na(ptau217)) %>%
+  select(CONP_ID, biomarker_visit = Visit_label, biomarker_date = Date_taken, ptau217)
+
+cat("Participants with ptau181:", n_distinct(biomarkers_ptau181$CONP_ID), "\n")
+cat("Participants with ptau217:", n_distinct(biomarkers_ptau217$CONP_ID), "\n")
+
+# Function to find closest biomarker measurement to PET scan
+find_closest_biomarker <- function(pet_data, biomarker_data, biomarker_col) {
+
+  # Convert dates to Date objects
+  pet_data <- pet_data %>%
+    mutate(pet_date_parsed = ymd(paste0(pet_date, "-01")))
+
+  biomarker_data <- biomarker_data %>%
+    mutate(biomarker_date_parsed = ymd(paste0(biomarker_date, "-01")))
+
+  # For each PET scan, find closest biomarker
+
+  matched_data <- pet_data %>%
+    left_join(biomarker_data, by = "CONP_ID", relationship = "many-to-many") %>%
+    mutate(
+      date_diff_months = abs(interval(biomarker_date_parsed, pet_date_parsed) / months(1))
+    ) %>%
+    group_by(CONP_ID) %>%
+    slice_min(date_diff_months, n = 1, with_ties = FALSE) %>%
+    ungroup()
+
+  return(matched_data)
+}
+
+# Match ptau181
+pet_tau_ptau181 <- find_closest_biomarker(pet_tau, biomarkers_ptau181, "ptau181") %>%
+  filter(!is.na(ptau181)) %>%
+  left_join(crs_factors, by = "CONP_ID")
+
+# Match ptau217
+pet_tau_ptau217 <- find_closest_biomarker(pet_tau, biomarkers_ptau217, "ptau217") %>%
+  filter(!is.na(ptau217)) %>%
+  left_join(crs_factors, by = "CONP_ID")
+```
+
+## Descriptive Statistics
+
+```{r descriptive-tau-ptau181}
+# Summary table for ptau181 analysis cohort
+pet_tau_ptau181 %>%
+  select(tau_status, SUVR, ptau181, age_at_pet) %>%
+  tbl_summary(
+    by = tau_status,
+    statistic = list(
+      all_continuous() ~ "{mean} ({sd})"
+    ),
+    label = list(
+      SUVR ~ "SUVR",
+      ptau181 ~ "p-tau181 (pg/mL)",
+      age_at_pet ~ "Age at PET"
+    )
+  ) %>%
+  add_overall() %>%
+  add_p() %>%
+  as_gt() %>%
+  tab_header(title = "Cohort Characteristics by Tau Status (ptau181 analysis)")
+```
+
+```{r descriptive-tau-ptau217}
+# Summary table for ptau217 analysis cohort
+pet_tau_ptau217 %>%
+  select(tau_status, SUVR, ptau217, age_at_pet) %>%
+  tbl_summary(
+    by = tau_status,
+    statistic = list(
+      all_continuous() ~ "{mean} ({sd})"
+    ),
+    label = list(
+      SUVR ~ "SUVR",
+      ptau217 ~ "p-tau217 (pg/mL)",
+      age_at_pet ~ "Age at PET"
+    )
+  ) %>%
+  add_overall() %>%
+  add_p() %>%
+  as_gt() %>%
+  tab_header(title = "Cohort Characteristics by Tau Status (ptau217 analysis)")
+```
+
+## Biomarker Distributions
+
+```{r distributions-tau}
+#| fig-width: 10
+#| fig-height: 4
+
+# ptau181 distribution
+p1 <- pet_tau_ptau181 %>%
+  ggplot(aes(x = ptau181, fill = tau_status)) +
+  geom_histogram(bins = 30, alpha = 0.7, position = "identity") +
+  scale_fill_manual(values = c("T-" = "#2166AC", "T+" = "#B2182B")) +
+  labs(
+    title = "p-tau181 Distribution by Tau Status",
+    x = "p-tau181 (pg/mL)",
+    y = "Count",
+    fill = "Tau Status"
+  ) +
+  theme_minimal()
+
+# ptau217 distribution
+p2 <- pet_tau_ptau217 %>%
+  ggplot(aes(x = ptau217, fill = tau_status)) +
+  geom_histogram(bins = 30, alpha = 0.7, position = "identity") +
+  scale_fill_manual(values = c("T-" = "#2166AC", "T+" = "#B2182B")) +
+  labs(
+    title = "p-tau217 Distribution by Tau Status",
+    x = "p-tau217 (pg/mL)",
+    y = "Count",
+    fill = "Tau Status"
+  ) +
+  theme_minimal()
+
+library(patchwork)
+p1 + p2
+```
+
+## Logistic Regression Models
+
+### p-tau181 Models
+
+```{r model-ptau181}
+# Model 1: Biomarker only
+model_ptau181_bio <- glm(
+  tau_positive ~ ptau181,
+  data = pet_tau_ptau181,
+  family = binomial(link = "logit")
+)
+
+# Model results
+cat("=== Model Results ===\n\n")
+summary(model_ptau181_bio)
+cat("\nOdds Ratios (95% CI):\n")
+exp(cbind(OR = coef(model_ptau181_bio), confint(model_ptau181_bio)))
+```
+
+### p-tau217 Models
+
+```{r model-ptau217}
+# Model 1: Biomarker only
+model_ptau217_bio <- glm(
+  tau_positive ~ ptau217,
+  data = pet_tau_ptau217,
+  family = binomial(link = "logit")
+)
+
+# Model results
+cat("=== Model 1Results ===\n\n")
+summary(model_ptau217_bio)
+cat("\nOdds Ratios (95% CI):\n")
+exp(cbind(OR = coef(model_ptau217_bio), confint(model_ptau217_bio)))
+```
+
+## ROC Analysis and Optimal Cutoffs
+
+### p-tau181 ROC
+
+```{r roc-ptau181}
+#| fig-width: 6
+#| fig-height: 6
+
+# ROC curve - ptau181
+roc_ptau181 <- roc(
+  pet_tau_ptau181$tau_positive,
+  pet_tau_ptau181$ptau181,
+  levels = c(0, 1),
+  direction = "<"
+)
+
+# AUC with confidence interval
+auc_ptau181 <- auc(roc_ptau181)
+ci_auc_ptau181 <- ci.auc(roc_ptau181)
+
+cat("=== p-tau181 ROC Analysis ===\n")
+cat("AUC:", round(auc_ptau181, 3), "\n")
+cat("95% CI:", round(ci_auc_ptau181[1], 3), "-", round(ci_auc_ptau181[3], 3), "\n")
+
+# Youden index optimal cutoff
+coords_ptau181 <- coords(roc_ptau181, "best", best.method = "youden", ret = "all")
+cat("\n=== Optimal Cutoff (Youden Index) ===\n")
+cat("Cutoff:", round(coords_ptau181$threshold, 2), "pg/mL\n")
+cat("Sensitivity:", round(coords_ptau181$sensitivity * 100, 1), "%\n")
+cat("Specificity:", round(coords_ptau181$specificity * 100, 1), "%\n")
+cat("PPV:", round(coords_ptau181$ppv * 100, 1), "%\n")
+cat("NPV:", round(coords_ptau181$npv * 100, 1), "%\n")
+cat("Youden Index:", round(coords_ptau181$sensitivity + coords_ptau181$specificity - 1, 3), "\n")
+
+# Plot ROC
+plot(roc_ptau181,
+     main = "ROC Curve: p-tau181 Predicting Tau Positivity",
+     print.auc = TRUE,
+     print.auc.x = 0.4,
+     print.auc.y = 0.2,
+     col = "#2166AC",
+     lwd = 2)
+
+# Add optimal cutoff point
+points(coords_ptau181$specificity, coords_ptau181$sensitivity,
+       pch = 19, col = "#B2182B", cex = 1.5)
+text(coords_ptau181$specificity - 0.1, coords_ptau181$sensitivity + 0.05,
+     paste0("Cutoff: ", round(coords_ptau181$threshold, 2), " pg/mL"),
+     col = "#B2182B", cex = 0.8)
+```
+
+### p-tau217 ROC
+
+```{r roc-ptau217}
+#| fig-width: 6
+#| fig-height: 6
+
+# ROC curve - ptau217
+roc_ptau217 <- roc(
+  pet_tau_ptau217$tau_positive,
+  pet_tau_ptau217$ptau217,
+  levels = c(0, 1),
+  direction = "<"
+)
+
+# AUC with confidence interval
+auc_ptau217 <- auc(roc_ptau217)
+ci_auc_ptau217 <- ci.auc(roc_ptau217)
+
+cat("=== p-tau217 ROC Analysis ===\n")
+cat("AUC:", round(auc_ptau217, 3), "\n")
+cat("95% CI:", round(ci_auc_ptau217[1], 3), "-", round(ci_auc_ptau217[3], 3), "\n")
+
+# Youden index optimal cutoff
+coords_ptau217 <- coords(roc_ptau217, "best", best.method = "youden", ret = "all")
+cat("\n=== Optimal Cutoff (Youden Index) ===\n")
+cat("Cutoff:", round(coords_ptau217$threshold, 2), "pg/mL\n")
+cat("Sensitivity:", round(coords_ptau217$sensitivity * 100, 1), "%\n")
+cat("Specificity:", round(coords_ptau217$specificity * 100, 1), "%\n")
+cat("PPV:", round(coords_ptau217$ppv * 100, 1), "%\n")
+cat("NPV:", round(coords_ptau217$npv * 100, 1), "%\n")
+cat("Youden Index:", round(coords_ptau217$sensitivity + coords_ptau217$specificity - 1, 3), "\n")
+
+# Plot ROC
+plot(roc_ptau217,
+     main = "ROC Curve: p-tau217 Predicting Amyloid Positivity",
+     print.auc = TRUE,
+     print.auc.x = 0.4,
+     print.auc.y = 0.2,
+     col = "#2166AC",
+     lwd = 2)
+
+# Add optimal cutoff point
+points(coords_ptau217$specificity, coords_ptau217$sensitivity,
+       pch = 19, col = "#B2182B", cex = 1.5)
+text(coords_ptau217$specificity + 0.1, coords_ptau217$sensitivity - 0.05,
+     paste0("Cutoff: ", round(coords_ptau217$threshold, 2), " pg/mL"),
+     col = "#B2182B", cex = 0.8)
+```
+
+
+## Summary Results
+
+```{r summary-table}
+
+# Create summary table with biomarker-only models
+results_summary <- tibble(
+  Biomarker = c("p-tau181", "p-tau217"),
+  N = c(nrow(pet_tau_ptau181), nrow(pet_tau_ptau217)),
+  `N Tau+` = c(sum(pet_tau_ptau181$tau_positive), sum(pet_tau_ptau181$tau_positive)),
+  `AUC (95% CI)` = c(
+    paste0(round(auc(roc_ptau181), 3), " (", round(ci_auc_ptau181[1], 3), "-", round(ci_auc_ptau181[3], 3), ")"),
+    paste0(round(auc(roc_ptau217), 3), " (", round(ci_auc_ptau217[1], 3), "-", round(ci_auc_ptau217[3], 3), ")")
+  ),
+  `Cutoff (pg/mL)` = c(
+    round(coords_ptau181$threshold, 2),
+    round(coords_ptau217$threshold, 2)
+  ),
+  `Sensitivity` = c(
+    paste0(round(coords_ptau181$sensitivity * 100, 1), "%"),
+    paste0(round(coords_ptau217$sensitivity * 100, 1), "%")
+  ),
+  `Specificity` = c(
+    paste0(round(coords_ptau181$specificity * 100, 1), "%"),
+    paste0(round(coords_ptau217$specificity * 100, 1), "%")
+  ),
+  `PPV` = c(
+    paste0(round(coords_ptau181$ppv * 100, 1), "%"),
+    paste0(round(coords_ptau217$ppv * 100, 1), "%")
+  ),
+  `NPV` = c(
+    paste0(round(coords_ptau181$npv * 100, 1), "%"),
+    paste0(round(coords_ptau217$npv * 100, 1), "%")
+  ),
+  `Youden Index` = c(
+    round(coords_ptau181$sensitivity + coords_ptau181$specificity - 1, 3),
+    round(coords_ptau217$sensitivity + coords_ptau217$specificity - 1, 3)
+  )
+)
+
+results_summary %>%
+  gt() %>%
+  tab_header(
+    title = "Summary: Plasma Biomarkers Predicting Tau PET Positivity",
+    subtitle = paste0("Tau positivity defined as SUVR ≥ ", SUVR_THRESHOLD, " (PREVENT-AD specific)")
+  )
+```
+
+```{r save-results}
+
+# Save primary results
+write_csv(results_summary,
+          file.path(AIM1_OUTPUT_PATH$tables, "PREVENTAD_tau_prediction_primary.csv"))
+
+cat("\nResults saved to:\n")
+cat("- ", file.path(AIM1_OUTPUT_PATH$tables, "PREVENTAD_tau_prediction_primary.csv"), "\n")
+```
+

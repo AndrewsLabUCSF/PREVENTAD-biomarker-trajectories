@@ -1,0 +1,13 @@
+---
+title: "Aim 1: Cross-sectional Diagnostics"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: true
+    code-summary: "Show code"
+execute:
+  warning: false
+  message: false
+---
+
