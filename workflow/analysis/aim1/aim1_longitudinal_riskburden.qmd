@@ -688,12 +688,6 @@ The predicted biomarker trajectories are generated from the linear mixed-effects
   - Education: sample mean years
 - Trajectories for other demographic profiles would differ due to covariate × time interactions
 
-**Interpretation Notes:**
-- Predicted lines represent **expected values**, not individual trajectories
-- Confidence intervals are not shown to avoid visual clutter, but uncertainty exists around predictions
-- Diverging trajectories (lines spreading apart over time) indicate significant time × risk interactions
-- Parallel trajectories indicate constant risk score effects across time (main effect only)
-
 ## Predicted trajectories: CogDrisk
 
 ```{r trajectories-cogdrisk}
