@@ -488,6 +488,101 @@ if (length(aligned_plots) > 0) {
 }
 ```
 
+```{r ptau217-spaghetti}
+#| fig-width: 6
+#| fig-height: 5
+ptau217_threshold <- sila_results_primary$ptau217$threshold
+spag_df <- sila_results_primary$ptau217$sila_fit %>%
+    left_join(amyloid_status_lookup, by = c("subid" = "CONP_ID")) %>%
+    rename(abpet_pos = amyloid_status) %>%
+    mutate(
+      abpet_pos = ifelse(is.na(abpet_pos), "Unknown", as.character(abpet_pos)),
+      abpet_pos = factor(abpet_pos, levels = c("A-", "Unknown", "A+")), 
+      abptau217_pos = ifelse(val > ptau217_threshold, "A+", "A-")
+    ) %>%
+    arrange(subid, age) %>% 
+    group_by(subid) %>%
+    mutate(
+      ever_ptaupos = ifelse( any(val > ptau217_threshold, na.rm = TRUE), "A+", "A-"
+    )
+  ) %>%
+  ungroup()
+
+silaptau217_res <- sila_results_primary$ptau217$sila_result 
+
+amyloid_scale <- scale_color_manual(
+  values = c("A-" = "gray50", "A+" = "#B2182B"),
+  name = "Amyloid Status"
+)
+
+base_theme <- theme_classic(base_size = 7) +
+  theme(
+    plot.title = element_text(size = 8, face = "bold", hjust = 0),
+    axis.title = element_text(size = 7),
+    axis.text = element_text(size = 6),
+    axis.line = element_line(linewidth = 0.4),
+    axis.ticks = element_line(linewidth = 0.35),
+    axis.ticks.length = unit(1.2, "mm"),
+    legend.title = element_text(size = 7),
+    legend.text = element_text(size = 6),
+    legend.key.height = unit(3, "mm"),
+    legend.key.width = unit(6, "mm"),
+    legend.spacing.x = unit(1.5, "mm"),
+    legend.margin = margin(0, 0, 0, 0),
+    legend.box.margin = margin(0, 0, 0, 0),
+    plot.margin = margin(0, 0, 0, 0),
+    panel.spacing = unit(1.5, "mm")
+  )
+
+spag.p <- ggplot(spag_df, aes(x = age, y = val, group = subid, color = ever_ptaupos)) +
+    geom_line(linewidth = 0.35, alpha = 0.7) +
+    geom_point(size = 0.5, alpha = 0.8) +
+    geom_hline(yintercept = threshold, linetype = "dashed", color = "black", linewidth = 0.5) +
+    amyloid_scale +
+    labs(
+      title = "p-tau217 Trajectories",
+      x = "Age (years)",
+      y = "p-tau217 (pg/mL)"
+    ) +
+    base_theme +
+    theme(
+      legend.position = "bottom"
+      )
+
+spag.p 
+
+sila.p <- ggplot(spag_df, aes(x = estdtt0, y = val, group = subid, color = ever_ptaupos)) +
+            geom_line(linewidth = 0.35, alpha = 0.7) +
+            geom_point(size = 0.5, alpha = 0.8) +
+            geom_line(data = res$tsila, aes(x = adtime, y = val, group = NULL, color = NULL),
+                      color = "black", linewidth = 1) +
+            geom_hline(yintercept = threshold, linetype = "dashed", color = "black", linewidth = 0.5) +
+            geom_vline(xintercept = 0, linetype = "dashed", color = "black", linewidth = 0.5) +
+            amyloid_scale +
+            labs(
+              title = "p-tau217 SILA",
+              # subtitle = paste0(title_suffix, " (n=", sila_output$n_subjects, ")"),
+              x = "Estimated Time to Threshold (years)",
+              y = "p-tau217 (pg/mL)"
+            ) +
+            base_theme +
+            theme(
+              legend.position = "none"
+              )
+
+sila.p
+
+combined_plot <- spag.p + sila.p +
+  plot_layout(widths = c(1, 1)) &
+  theme(
+    plot.margin = margin(0, 0, 0, 0)
+  )
+combined_plot
+
+ggsave("results/Aim2/aarga_sila.png", plot = combined_plot, width = 3.75, height = 1.75, units = 'in', dpi = 600)
+
+```
+
 ## Summary Results
 
 ### Primary Threshold (PREVENT-AD Specific: CL ≥ 22.32)
@@ -589,4 +684,3 @@ if (nrow(sila_fits_primary) > 0) {
 cat("Results saved to:\n")
 cat("- results/Aim1/tables/PREVENTAD_SILA_summary.csv\n")
 ```
-
