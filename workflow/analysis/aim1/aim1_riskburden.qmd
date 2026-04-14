@@ -172,6 +172,7 @@ cutoff_sample_sizes %>%
 ```
 
 ## Burden associations with biomarker levels
+
 ```{r risk-burden-assoc, warning=FALSE}
 #| fig-width: 12
 #| fig-height: 18
@@ -210,10 +211,10 @@ cogdrisk_plot <- risk_scores_longer %>%
   geom_violin(alpha = 0.7) +
   geom_boxplot(width = 0.1, fill = "white") +
   facet_grid(biomarker ~ strategy_label, scales = "free") +
-  stat_compare_means(method = "anova",
+  stat_compare_means(method = "kruskal.test",
                      label.y.npc = 0.8,
                      geom = "label",
-                     size = 2) +
+                     size = 5) +
   labs(x = "CogDrisk Composite Risk Score",
        y = "Biomarker Level",
        title = "Biomarker Levels by CogDrisk Composite Risk Score") +
@@ -230,10 +231,10 @@ libra2_plot <- risk_scores_longer %>%
   geom_violin(alpha = 0.7) +
   geom_boxplot(width = 0.1, fill = "white") +
   facet_grid(biomarker ~ strategy_label, scales = "free") +
-  stat_compare_means(method = "anova",
+  stat_compare_means(method = "kruskal.test",
                      label.y.npc = 0.8,
                      geom = "label",
-                     size = 2) +
+                     size = 5) +
   labs(x = "LIBRA2 Composite Risk Score",
        y = "Biomarker Level",
        title = "Biomarker Levels by LIBRA2 Composite Risk Score") +
@@ -323,6 +324,7 @@ res_risk_preventad <- bind_rows(select(risk_preventad, model, outcome, dataf)) %
 ```
 
 ## Risk burden model results - Plot
+
 ```{r risk-burden-model-plot}
 #| fig-width: 14
 #| fig-height: 10
@@ -390,6 +392,7 @@ for (i in model_order){
 ```
 
 ## Diagnostics plot
+
 ```{r diagnostics-plot}
 #| fig-width: 14
 #| fig-height: 14

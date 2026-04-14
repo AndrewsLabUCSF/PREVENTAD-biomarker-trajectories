@@ -9,6 +9,7 @@ biomarkers <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_biomarkers.rd
 apoe_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_APOE.rds"))
 fhx_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_fhx.rds"))
 grs_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_GRS.rds"))
+mci_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_MCI.rds"))
 
 
 # Load CRS factors and scored risk scores
@@ -52,7 +53,7 @@ other_biomarkers_first <- biomarkers %>%
   ungroup()
 
 biomarker_baseline_dat <- predictors_dat %>%
-  right_join((ptau217_first %>% select(CONP_ID, ptau217)), by = "CONP_ID") %>%
+  left_join((ptau217_first %>% select(CONP_ID, ptau217)), by = "CONP_ID") %>%
   left_join(other_biomarkers_first, by = "CONP_ID") %>%
   # Add log transformations
   mutate(
@@ -82,7 +83,7 @@ other_biomarkers_last <- biomarkers %>%
   ungroup()
 
 biomarker_last_dat <- predictors_dat %>%
-  right_join((ptau217_last %>% select(CONP_ID, ptau217)), by = "CONP_ID") %>%
+  left_join((ptau217_last %>% select(CONP_ID, ptau217)), by = "CONP_ID") %>%
   left_join(other_biomarkers_last, by = "CONP_ID") %>%
   # Add log transformations
   mutate(
@@ -93,9 +94,12 @@ biomarker_last_dat <- predictors_dat %>%
     ptau217_ab42_ratio_log = log(ptau217_ab42_ratio)
   )
 
+# Filter out participants that progressed to MCI
+biomarker_last_nomci_dat <- biomarker_last_dat %>% filter(!CONP_ID %in% mci_dat$CONP_ID)
+
 ## Longitudinal ----
-all_dat <- biomarkers %>%
-  left_join(predictors_dat, by = "CONP_ID") %>%
+all_dat <- predictors_dat %>%
+  left_join(biomarkers, by = "CONP_ID") %>%
   # Add log transformations
   mutate(
     gfap_log = log(gfap),
@@ -110,13 +114,14 @@ all_dat <- biomarkers %>%
 
 # SAVE FINAL DATAFRAMES ---------------------------------------------------
 saveRDS(biomarker_baseline_dat, file.path(DATA_CLEANED_PATH, "PREVENTAD_baseline.rds"))
-saveRDS(biomarker_last_dat, file.path(DATA_CLEANED_PATH, "PREVENTAD_lastvisit.rds"))
+saveRDS(biomarker_last_dat, file.path(DATA_CLEANED_PATH, "PREVENTAD_lastvisit_all.rds"))
+saveRDS(biomarker_last_nomci_dat, file.path(DATA_CLEANED_PATH, "PREVENTAD_lastvisit_nomci.rds"))
 saveRDS(all_dat, file.path(DATA_CLEANED_PATH, "PREVENTAD_longitudinal.rds"))
 
 # Print summary
 cat("\n=== Data Loading Complete ===\n")
-cat("Baseline:", nrow(baseline_dat), "participants\n")
-cat("Last visit:", nrow(biomarker_last_dat), "participants\n")
+cat("Baseline:", nrow(biomarker_baseline_dat), "participants\n")
+cat("Last visit:", nrow(biomarker_last_nomci_dat), "participants\n")
 cat("Longitudinal data:", nrow(all_dat), "observations from",
     length(unique(all_dat$CONP_ID)), "participants\n")
 

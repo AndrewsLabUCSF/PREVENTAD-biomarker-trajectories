@@ -30,6 +30,8 @@ predictors <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_predictors.rds"))
 baseline_dat <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_baseline.rds"))
 lastvisit_dat <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_lastvisit.rds"))
 all_dat <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_longitudinal.rds"))
+
+GRS <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_GRS.rds"))
 ```
 
 ## Overview
@@ -53,6 +55,27 @@ apoe_hist <- predictors %>%
        y = "Count") + 
   theme(legend.position="none")
 apoe_hist
+
+ggsave(
+  file.path(EDA_OUTPUT_PATH$figures, "APOE_dist.png"),
+  apoe_hist, width = 14, height = 10, dpi = 300
+)
+```
+
+### GRS
+
+```{r grs}
+grs_plot <- GRS %>%
+  ggplot(aes(x = GRS)) +
+  geom_density(col="red") +
+  labs(x = "GRS",
+       y = "Density")
+grs_plot
+
+ggsave(
+  file.path(EDA_OUTPUT_PATH$figures, "GRS_plot.png"),
+  grs_plot, width = 14, height = 10, dpi = 300
+)
 ```
 
 ### Family history

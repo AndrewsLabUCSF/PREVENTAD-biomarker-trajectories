@@ -75,7 +75,6 @@ risk_dat_long <- all_dat %>%
       str_detect(family_history, "2\\+") ~ 1,
       TRUE ~ 0
     ),
-    # fhx_burden = if_else(family_history == "1 FDR", 0, 1),
     
     # APOE burden - e4+
     apoe_burden = if_else(apoe == "e4+", 1, 0),
@@ -595,7 +594,7 @@ p_cogd_interact <- ggplot(plot_data_cogdrisk_interact,
 
 print(p_cogd_interact)
 
-ggsave(file.path(AIM1_OUTPUT_PATH$figures, "PREVENTAD_CogDrisk_dose_interact.png"),
+ggsave(file.path(AIM1_OUTPUT_PATH$figures, "PREVENTAD_CogDrisk_time_interact.png"),
        p_cogd_interact, width = 10, height = 7, dpi = 300)
 ```
 
@@ -648,7 +647,7 @@ p_libra_interact <- ggplot(plot_data_libra2_interact,
 
 print(p_libra_interact)
 
-ggsave(file.path(AIM1_OUTPUT_PATH$figures, "PREVENTAD_LIBRA2_dose_interact.png"),
+ggsave(file.path(AIM1_OUTPUT_PATH$figures, "PREVENTAD_LIBRA2_time_interact.png"),
        p_libra_interact, width = 10, height = 7, dpi = 300)
 ```
 
@@ -693,6 +692,7 @@ The predicted biomarker trajectories are generated from the linear mixed-effects
 ```{r trajectories-cogdrisk}
 #| fig-width: 14
 #| fig-height: 10
+#| fig-dpi: 96
 
 # Calculate maximum follow-up time per biomarker
 biomarker_max_years <- risk_dat_long %>%
@@ -729,7 +729,7 @@ cogdrisk_predictions <- cogdrisk_interact_models %>%
   select(outcome, predictions) %>%
   unnest(predictions)
 
-# Prepare observed data
+# Prepare observed data (kept for downstream chunks)
 risk_dat_long_plot <- risk_dat_long %>%
   pivot_longer(
     cols = all_of(BIOMARKERS_TRANS),
@@ -737,36 +737,114 @@ risk_dat_long_plot <- risk_dat_long %>%
     values_to = "observed"
   )
 
+# Readable outcome labels (ordered for consistent facet display)
+outcome_labels <- c(
+  ab_ratio               = "A\u03b242/40",
+  gfap_log               = "GFAP",
+  nfl_log                = "NfL",
+  ptau181_log            = "ptau-181",
+  ptau217_log            = "ptau-217",
+  ptau217_ab42_ratio_log = "ptau-217/A\u03b242 ratio"
+)
+
+# Add readable labels to plotting datasets (separate vars; risk_dat_long_plot unchanged)
+# Drop NA observed values so late-visit rows (e.g. GFAP=NA at year 10) don't
+# expand the x-scale for panels where that biomarker wasn't measured.
+risk_dat_long_plot_lbl <- risk_dat_long_plot %>%
+  filter(!is.na(observed)) %>%
+  mutate(outcome_label = factor(outcome_labels[outcome], levels = outcome_labels))
+
+cogdrisk_pred_lbl <- cogdrisk_predictions %>%
+  mutate(outcome_label = factor(outcome_labels[outcome], levels = outcome_labels))
+
+# Per-panel annotations from the interaction model results
+# Main effect: risk score at baseline (vertical separation of lines)
+cogd_annot_main <- dose_response_results %>%
+  filter(model_type == "Time Interaction",
+         risk_type  == "CogDrisk",
+         term       == "risk_score_cogd") %>%
+  mutate(
+    outcome_label = factor(outcome_labels[outcome], levels = outcome_labels),
+    p_fmt = if_else(p.value < 0.001, "< 0.001", as.character(p.value)),
+    annot = paste0("Risk: \u03b2 = ", estimate,
+                   " [", conf.low, ", ", conf.high, "], p = ", p_fmt, stars)
+  )
+
+# Interaction: time × risk score (divergence in slope)
+cogd_annot_inter <- dose_response_results %>%
+  filter(model_type == "Time Interaction",
+         risk_type  == "CogDrisk",
+         str_detect(term, "years_centered:risk_score")) %>%
+  mutate(
+    outcome_label = factor(outcome_labels[outcome], levels = outcome_labels),
+    p_fmt = if_else(p.value < 0.001, "< 0.001", as.character(p.value)),
+    annot = paste0("Time\u00d7Risk: \u03b2 = ", estimate,
+                   " [", conf.low, ", ", conf.high, "], p = ", p_fmt, stars)
+  )
+
+# Build descriptive caption (matching ptau-combined-focused-plot style)
+n_pts <- length(unique(risk_dat_long$CONP_ID))
+n_obs <- nrow(risk_dat_long)
+
+caption_text <- paste0(
+  "Cohort: PREVENT-AD. N = ", n_pts, "; Observations = ", n_obs, "\n",
+  "Risk indicators: APOE e4+; Family history (\u22652 first-degree relatives);  Genetic risk score (top quartile); ",
+  "CogDrisk > 1 SD above mean. Composite score: 0\u20134 scale (sum of binary indicators).\n",
+  "Lines = model-predicted population trajectories (LMM: biomarker ~ years \u00d7 risk_score + (1 | ID)). ",
+  "Axis scales differ by biomarker to reflect observed data range."
+)
+
 # Plot trajectories
 p_cogd_traj <- ggplot() +
-  geom_point(data = risk_dat_long_plot,
+  geom_point(data = risk_dat_long_plot_lbl,
              aes(x = years, y = observed, color = factor(risk_score_cogd)),
              alpha = 0.2, size = 0.8) +
-  geom_line(data = cogdrisk_predictions,
+  geom_line(data = cogdrisk_pred_lbl,
             aes(x = years, y = predicted,
                 color = factor(risk_score_cogd),
                 group = risk_score_cogd),
             linewidth = 1.2) +
-  scale_color_viridis_d(option = "plasma", begin = 0.2, end = 0.9) +
-  facet_wrap(~outcome, scales = "free", ncol = 3) +
+  # geom_label(
+  #   data        = cogd_annot_main,
+  #   aes(x = -Inf, y = Inf, label = annot),
+  #   inherit.aes = FALSE,
+  #   hjust = -0.04, vjust = 1.4,
+  #   size = 3, color = "grey20",
+  #   label.padding = unit(0.2, "lines")
+  # ) +
+  geom_label(
+    data        = cogd_annot_inter,
+    aes(x = -Inf, y = Inf, label = annot),
+    inherit.aes = FALSE,
+    hjust = -0.04, vjust = 2,
+    size = 3.5, color = "grey20",
+    label.padding = unit(0.2, "lines")
+  ) +
+  scale_color_viridis_d(option = "plasma", begin = 0.2, end = 0.9,
+                        name = "# Risk Indicators") +
+  scale_x_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
+  scale_y_continuous(expand = expansion(mult = c(0.02, 0.05))) +
+  facet_wrap(~outcome_label, scales = "free", ncol = 3) +
   labs(
     x = "Years from Baseline",
     y = "Biomarker Level",
-    color = "Risk Score",
-    title = "CogDrisk: Predicted Biomarker Trajectories by Risk Score",
-    caption = "Note: X-axis scales differ by biomarker to reflect actual data availability"
+    title = "Predicted Blood-based Biomarker Trajectories by Number of Risk Indicators",
+    caption = caption_text
   ) +
   theme_bw(base_size = 12) +
   theme(
     legend.position = "bottom",
     strip.text = element_text(face = "bold"),
-    strip.background = element_rect(fill = "grey90")
+    strip.background = element_rect(fill = "grey90"),
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.caption = element_text(size = 9, hjust = 0, lineheight = 1.2,
+                                margin = margin(t = 10))
   )
 
 print(p_cogd_traj)
 
-ggsave(file.path(AIM1_OUTPUT_PATH$figures, "PREVENTAD_CogDrisk_trajectories.png"),
-       p_cogd_traj, width = 14, height = 10, dpi = 300)
+ggsave(file.path(AIM1_OUTPUT_PATH$figures, "longitudinal_CogDrisk_trajectories.png"),
+       p_cogd_traj, width = 14, height = 10, dpi = 250)
 ```
 
 **CogDrisk Results Summary:**
@@ -886,29 +964,6 @@ p_ptau217 <- ggplot() +
     plot.title = element_text(face = "bold", size = 12)
   )
 
-p_ptau181 <- ggplot() +
-  geom_point(data = ptau181_obs,
-             aes(x = years, y = observed, color = factor(risk_score_cogd)),
-             alpha = 0.3, size = 1.5) +
-  geom_line(data = ptau181_pred,
-            aes(x = years, y = predicted,
-                color = factor(risk_score_cogd),
-                group = risk_score_cogd),
-            linewidth = 1.5) +
-  scale_color_viridis_d(option = "plasma", begin = 0.2, end = 0.9,
-                        name = "# of Risk Indicators") +
-  scale_x_continuous(limits = c(0, 5), breaks = seq(0, 5, 1)) +
-  labs(
-    x = "Years from Baseline",
-    y = "ptau-181 (log-transformed)",
-    title = "ptau-181"
-  ) +
-  theme_bw(base_size = 13) +
-  theme(
-    legend.position = "right",
-    plot.title = element_text(face = "bold", size = 12)
-  )
-
 # Create annotation text with cohort and risk indicator information
 n_total <- length(unique(risk_dat_long$CONP_ID))
 n_obs <- nrow(risk_dat_long)
@@ -941,120 +996,65 @@ ggsave(file.path(AIM1_OUTPUT_PATH$figures, "PREVENTAD_ptau181_trajectories.png")
        p_ptau181, width = 12, height = 9, dpi = 300)
 ```
 
-## Focused Plot: CogDrisk + LIBRA2 ptau Trajectories (combined)
+## Focused Plot: CogDrisk + LIBRA2 ptau217 Trajectories (combined)
 
 ```{r ptau-combined-focused-plot}
-#| fig-width: 14
-#| fig-height: 10
-
-# LIBRA2 observed data — risk_score_libra2 is already in risk_dat_long_plot
-ptau217_obs_libra2 <- risk_dat_long_plot %>%
+ptau217_obs <- risk_dat_long_plot %>%
   filter(outcome == "ptau217_log")
-
-ptau181_obs_libra2 <- risk_dat_long_plot %>%
-  filter(outcome == "ptau181_log")
 
 ptau217_pred_libra2 <- libra2_predictions %>%
   filter(outcome == "ptau217_log")
 
-ptau181_pred_libra2 <- libra2_predictions %>%
-  filter(outcome == "ptau181_log")
+# Interaction term annotations for ptau217 — LIBRA2
+ptau217_annot_libra2 <- dose_response_results %>%
+  filter(model_type == "Time Interaction",
+         risk_type  == "LIBRA2",
+         outcome    == "ptau217_log",
+         str_detect(term, "years_centered:risk_score")) %>%
+  mutate(
+    p_fmt = if_else(p.value < 0.001, "< 0.001", as.character(p.value)),
+    annot = paste0("Time\u00d7Risk: \u03b2 = ", estimate,
+                   " [", conf.low, ", ", conf.high, "], p = ", p_fmt, stars)
+  )
 
-# Shared colour scale
-viridis_scale <- scale_color_viridis_d(option = "plasma", begin = 0.2, end = 0.9,
-                                       name = "Risk Score")
-
-# ptau-217: CogDrisk
-p_ptau217_cogd <- ggplot() +
-  geom_point(data = ptau217_obs,
-             aes(x = years, y = observed, color = factor(risk_score_cogd)),
-             alpha = 0.3, size = 1.2) +
-  geom_line(data = ptau217_pred,
-            aes(x = years, y = predicted,
-                color = factor(risk_score_cogd), group = risk_score_cogd),
-            linewidth = 1.5) +
-  viridis_scale +
-  scale_x_continuous(limits = c(0, 12), breaks = seq(0, 12, 2)) +
-  labs(x = "Years from Baseline", y = "ptau-217 (log)",
-       title = "ptau-217 — CogDrisk") +
-  theme_bw(base_size = 12) +
-  theme(plot.title = element_text(face = "bold", size = 12),
-        legend.position = "none")
+n_ptau217_obs <- nrow(risk_dat_long %>% filter(!is.na(ptau217_log)))
 
 # ptau-217: LIBRA2
-p_ptau217_libra2 <- ggplot() +
-  geom_point(data = ptau217_obs_libra2,
+p217_libra2 <- ggplot() +
+  geom_point(data = ptau217_obs,
              aes(x = years, y = observed, color = factor(risk_score_libra2)),
              alpha = 0.3, size = 1.2) +
   geom_line(data = ptau217_pred_libra2,
             aes(x = years, y = predicted,
                 color = factor(risk_score_libra2), group = risk_score_libra2),
             linewidth = 1.5) +
-  viridis_scale +
+  geom_label(data        = ptau217_annot_libra2,
+             aes(x = -Inf, y = Inf, label = annot),
+             inherit.aes = FALSE,
+             hjust = -0.04, vjust = 2,
+             size = 3, color = "grey20",
+             label.padding = unit(0.2, "lines")) +
+  scale_color_viridis_d(option = "plasma", begin = 0.2, end = 0.9,
+                        name = "# Risk Indicators") +
   scale_x_continuous(limits = c(0, 12), breaks = seq(0, 12, 2)) +
+  scale_y_continuous(expand = expansion(mult = c(0.02, 0.05))) +
   labs(x = "Years from Baseline", y = NULL,
-       title = "ptau-217 — LIBRA2") +
+       title = "LIBRA2") +
   theme_bw(base_size = 12) +
-  theme(plot.title = element_text(face = "bold", size = 12),
-        legend.position = "none")
-
-# ptau-181: CogDrisk
-p_ptau181_cogd <- ggplot() +
-  geom_point(data = ptau181_obs,
-             aes(x = years, y = observed, color = factor(risk_score_cogd)),
-             alpha = 0.3, size = 1.2) +
-  geom_line(data = ptau181_pred,
-            aes(x = years, y = predicted,
-                color = factor(risk_score_cogd), group = risk_score_cogd),
-            linewidth = 1.5) +
-  viridis_scale +
-  scale_x_continuous(limits = c(0, 5), breaks = seq(0, 5, 1)) +
-  labs(x = "Years from Baseline", y = "ptau-181 (log)",
-       title = "ptau-181 — CogDrisk") +
-  theme_bw(base_size = 12) +
-  theme(plot.title = element_text(face = "bold", size = 12),
-        legend.position = "bottom")
-
-# ptau-181: LIBRA2
-p_ptau181_libra2 <- ggplot() +
-  geom_point(data = ptau181_obs_libra2,
-             aes(x = years, y = observed, color = factor(risk_score_libra2)),
-             alpha = 0.3, size = 1.2) +
-  geom_line(data = ptau181_pred_libra2,
-            aes(x = years, y = predicted,
-                color = factor(risk_score_libra2), group = risk_score_libra2),
-            linewidth = 1.5) +
-  viridis_scale +
-  scale_x_continuous(limits = c(0, 5), breaks = seq(0, 5, 1)) +
-  labs(x = "Years from Baseline", y = NULL,
-       title = "ptau-181 — LIBRA2") +
-  theme_bw(base_size = 12) +
-  theme(plot.title = element_text(face = "bold", size = 12),
-        legend.position = "bottom")
-
-# 2×2 layout: rows = biomarker, cols = score type
-p_ptau_combined <- (p_ptau217_cogd | p_ptau217_libra2) /
-                   (p_ptau181_cogd  | p_ptau181_libra2) +
+  theme(plot.title    = element_text(face = "bold", size = 8, hjust = 0.5),
+        legend.position = "bottom",
+        strip.background = element_rect(fill = "grey90"),
+        strip.text       = element_text(face = "bold")) +
   plot_annotation(
-    title = "Phosphorylated Tau Trajectories by Composite Risk Score",
-    caption = paste0(
-      "Cohort: PREVENT-AD. N = ", length(unique(risk_dat_long$CONP_ID)),
-      "; Observations = ", nrow(risk_dat_long), "\n",
-      "Risk indicators: FHx ≥2 FDR; APOE e4+; GRS top quartile; ",
-      "CogDrisk/LIBRA2 > 1 SD above mean. Composite score: 0–4 scale.\n",
-      "LIBRA2 predictions at mean age, female sex, mean education."
-    ),
-    theme = theme(
-      plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
-      plot.caption = element_text(size = 9, hjust = 0, lineheight = 1.2,
-                                  margin = margin(t = 10))
-    )
-  )
+    title   = "p-tau217 Trajectories by Composite Risk Score",
+    theme   = theme(
+      plot.title   = element_text(face = "bold", size = 10, hjust = 0)
+    ))
 
-print(p_ptau_combined)
+print(p217_libra2)
 
-ggsave(file.path(AIM1_OUTPUT_PATH$figures, "PREVENTAD_ptau217_combined_trajectory.png"),
-       p_ptau_combined, width = 14, height = 10, dpi = 300)
+ggsave(file.path(AIM1_OUTPUT_PATH$figures, "longitudinal_ptau217_LIBRA2_trajectory.png"),
+       p217_libra2, width = 4, height = 3.3, units = "in",dpi = 300)
 ```
 
 ## Summary
