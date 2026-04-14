@@ -1,0 +1,1179 @@
+---
+title: "Aim 2: SILA-Derived p-tau217 Positivity Risk Models"
+format:
+  html:
+    embed-resources: true
+    self-contained: true
+    toc: true
+    toc-depth: 3
+    code-fold: true
+    code-summary: "Show code"
+execute:
+  warning: false
+  message: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+knitr::opts_knit$set(root.dir = here::here())
+```
+
+## Overview
+
+This analysis evaluates predictors of earlier **SILA-derived p-tau217 positivity** in PREVENT-AD using a set of Cox models built around **time-invariant genetic and risk-burden variables**. The script includes a primary APOE-focused model family, additional models incorporating **family history**, **CogDrisk**, and **LIBRA2**, and cumulative-burden models that summarize multiple risk components into a single score.
+
+The analysis is intentionally restricted to predictors that are fixed at baseline or treated as baseline summaries so that participants can contribute SILA-estimated crossing ages that may occur before their first observed plasma visit.
+
+**Predictor domains included:**
+
+- APOE ε4 carrier status
+- Polygenic risk score (`GRS`)
+- Sex
+- Education
+- Family history burden
+- CogDrisk score
+- LIBRA2 score
+- Cumulative burden scores derived from APOE, family history, high GRS, and high CogDrisk or LIBRA2
+
+**Outcome construction:**
+
+- **Event**: last observed p-tau217 value is above the p-tau217 positivity threshold (`val >= valt0`)
+- **Event age**: SILA-estimated crossing age (`estaget0`) when available
+- **Censoring age**: age at last observed p-tau217 measurement (`age_last`)
+
+Three time-to-event specifications are used across the model set:
+
+1. **Standard**: `Surv(surv_age, event)`
+2. **Left-truncated**: `Surv(age_first, surv_age_lt, event)`
+3. **Time-since-baseline**: `Surv(fu_time, event)` with baseline age included as a covariate
+
+For the left-truncated analysis, participants with SILA-estimated event ages before their first observed plasma visit are retained and approximated as converting at study entry (`age_first + ε`) so they remain in the analysis cohort while satisfying counting-process survival requirements. The time-since-baseline models instead exclude these pre-baseline SILA events and model follow-up from the first observed plasma visit. Results are presented as descriptive tables and survival plots, adjusted Cox model summaries, and cumulative-burden visualizations.
+
+```{r packages}
+library(survival)
+library(patchwork)
+library(gt)
+library(gtsummary)
+library(survminer)
+library(ComplexUpset)
+library(broom)
+library(readr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+source("workflow/scripts/config.R")
+```
+
+## Load Data
+
+```{r load-data}
+sila_fits <- read_csv(
+  here("results", "Aim1", "tables", "PREVENTAD_SILA_individual_fits.csv"),
+  show_col_types = FALSE
+) %>%
+  filter(biomarker == "ptau217")
+
+baseline_dat <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_baseline.rds"))
+
+cat("p-tau217 SILA rows loaded:", nrow(sila_fits), "\n")
+cat("Participants in p-tau217 SILA data:", n_distinct(sila_fits$subid), "\n")
+```
+
+## Build Analysis Dataset
+
+```{r build-analysis-data}
+collapse_burden_factor <- function(x) {
+  factor(
+    if_else(x >= 3L, "3+", as.character(x)),
+    levels = c("0", "1", "2", "3+")
+  )
+}
+
+collapse_burden_binary <- function(x) {
+  factor(
+    if_else(x >= 2L, "2+", "0-1"),
+    levels = c("0-1", "2+")
+  )
+}
+
+# Baseline-derived burden cutoffs, aligned with the original Aim 2 Cox script.
+grs_q4_cutoff <- quantile(baseline_dat$GRS, probs = 0.75, na.rm = TRUE)
+cogdrisk_cutoff_1sd <- mean(baseline_dat$score_cogd, na.rm = TRUE) +
+                       sd(baseline_dat$score_cogd, na.rm = TRUE)
+libra2_cutoff_1sd <- mean(baseline_dat$score_libra2, na.rm = TRUE) +
+                     sd(baseline_dat$score_libra2, na.rm = TRUE)
+
+# Study entry: first observed p-tau217 visit
+sila_first <- sila_fits %>%
+  group_by(subid) %>%
+  slice_min(age, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  transmute(
+    CONP_ID = subid,
+    age_first = age
+  )
+
+# Event/censoring info: last observed p-tau217 visit
+sila_last <- sila_fits %>%
+  group_by(subid) %>%
+  slice_max(age, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  transmute(
+    CONP_ID = subid,
+    age_last = age,
+    val = val,
+    valt0 = valt0,
+    estaget0 = estaget0
+  ) %>%
+  left_join(sila_first, by = "CONP_ID")
+
+predictors_apoe <- baseline_dat %>%
+  transmute(
+    CONP_ID,
+    baseline_age = age,
+    apoe,
+    apoe_e4 = factor(if_else(apoe == "e4+", "e4+", "non-e4+"),
+                     levels = c("non-e4+", "e4+")),
+    apoe_burden = if_else(apoe == "e4+", 1L, 0L),
+    GRS,
+    grs_burden = if_else(GRS >= grs_q4_cutoff, 1L, 0L),
+    family_history,
+    fhx_2plus = factor(
+      if_else(grepl("2\\+", family_history), "2+ FDR", "<2 FDR"),
+      levels = c("<2 FDR", "2+ FDR")
+    ),
+    fhx_burden = if_else(grepl("2\\+", family_history), 1L, 0L),
+    score_cogd,
+    cogdrisk_burden = if_else(score_cogd > cogdrisk_cutoff_1sd, 1L, 0L),
+    score_libra2,
+    libra2_burden = if_else(score_libra2 > libra2_cutoff_1sd, 1L, 0L),
+    sex,
+    educ
+  )
+
+cox_data_full <- sila_last %>%
+  left_join(predictors_apoe, by = "CONP_ID") %>%
+  mutate(
+    event = if_else(val >= valt0, 1L, 0L),
+    surv_age = if_else(event == 1L & !is.na(estaget0), estaget0, age_last),
+    prebaseline_event = event == 1L & !is.na(surv_age) & surv_age < age_first
+  )
+
+# Use only variables needed for the APOE-focused models.
+cox_data <- cox_data_full %>%
+  drop_na(surv_age, age_first, event, apoe, GRS, sex, educ, baseline_age) %>%
+  mutate(
+    # Counting-process Surv(start, stop, event) requires stop > start.
+    # Approximate pre-baseline SILA events as occurring at study entry.
+    surv_age_lt = if_else(
+      event == 1L & surv_age <= age_first,
+      age_first + 1e-3,
+      surv_age
+    )
+  )
+
+cox_data_since_baseline <- cox_data %>%
+  filter(!prebaseline_event) %>%
+  mutate(
+    fu_time = surv_age - age_first,
+    event_group = factor(if_else(event == 1L, "A+", "A-"), levels = c("A-", "A+")),
+    risk_score_cogd = apoe_burden + fhx_burden + grs_burden + cogdrisk_burden,
+    risk_score_libra2 = apoe_burden + fhx_burden + grs_burden + libra2_burden,
+    risk_score_cogd_f = collapse_burden_factor(risk_score_cogd),
+    risk_score_libra2_f = collapse_burden_factor(risk_score_libra2),
+    risk_score_cogd_bin = collapse_burden_binary(risk_score_cogd),
+    risk_score_libra2_bin = collapse_burden_binary(risk_score_libra2)
+  )
+
+cox_data_risk <- cox_data %>%
+  drop_na(fhx_2plus, score_cogd)
+
+cox_data_since_baseline_risk <- cox_data_since_baseline %>%
+  drop_na(fhx_2plus, score_cogd, risk_score_cogd, risk_score_cogd_f, risk_score_cogd_bin)
+
+cox_data_since_baseline_libra <- cox_data_since_baseline %>%
+  drop_na(fhx_2plus, score_libra2, risk_score_libra2, risk_score_libra2_f, risk_score_libra2_bin)
+
+table1_data <- cox_data_since_baseline %>%
+  drop_na(
+    fhx_2plus,
+    score_cogd,
+    score_libra2,
+    risk_score_cogd_f,
+    risk_score_libra2_f
+  )
+
+cat("Participants in p-tau217 SILA data:", n_distinct(cox_data_full$CONP_ID), "\n")
+cat("Participants after complete-case filtering:", n_distinct(cox_data$CONP_ID), "\n")
+cat("Events:", sum(cox_data$event), "\n")
+cat("Censored:", sum(cox_data$event == 0), "\n")
+cat("Pre-baseline SILA events retained:", sum(cox_data$prebaseline_event), "\n")
+
+cox_data %>%
+  summarise(
+    min_entry = round(min(age_first, na.rm = TRUE), 1),
+    median_entry = round(median(age_first, na.rm = TRUE), 1),
+    max_entry = round(max(age_first, na.rm = TRUE), 1),
+    min_surv_age = round(min(surv_age, na.rm = TRUE), 1),
+    max_surv_age = round(max(surv_age, na.rm = TRUE), 1)
+  ) %>%
+  print()
+
+cat("Participants in Table 1 descriptive cohort:", n_distinct(table1_data$CONP_ID), "\n")
+```
+
+## Pre-Baseline Event Loss Table
+
+```{r prebaseline-loss}
+loss_table <- cox_data %>%
+  summarise(
+    analysis_set_n = n(),
+    events = sum(event),
+    censored = sum(event == 0),
+    prebaseline_events = sum(prebaseline_event),
+    retained_after_excluding_prebaseline = sum(!prebaseline_event),
+    retained_events = sum(event == 1L & !prebaseline_event),
+    retained_censored = sum(event == 0L & !prebaseline_event),
+    baseline_followup_n = nrow(cox_data_since_baseline)
+  ) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "metric",
+    values_to = "n"
+  ) %>%
+  mutate(
+    metric = recode(
+      metric,
+      analysis_set_n = "Participants in APOE analysis set",
+      events = "Events in APOE analysis set",
+      censored = "Censored in APOE analysis set",
+      prebaseline_events = "Pre-baseline SILA events",
+      retained_after_excluding_prebaseline = "Participants retained after excluding pre-baseline events",
+      retained_events = "Events retained after exclusion",
+      retained_censored = "Censored retained after exclusion",
+      baseline_followup_n = "Participants in time-since-baseline model"
+    )
+  )
+
+loss_table %>%
+  gt() %>%
+  tab_header(
+    title = "Impact of Excluding Pre-Baseline SILA Events",
+    subtitle = "Counts are based on the complete-case APOE analysis set"
+  )
+```
+
+## Fit Cox Models
+
+```{r fit-models}
+surv_std <- Surv(cox_data$surv_age, cox_data$event)
+surv_lt  <- Surv(cox_data$age_first, cox_data$surv_age_lt, cox_data$event)
+surv_baseline <- Surv(cox_data_since_baseline$fu_time, cox_data_since_baseline$event)
+
+model_standard <- coxph(
+  surv_std ~ apoe_e4 + GRS + sex + educ,
+  data = cox_data,
+  ties = "efron"
+)
+
+model_left_truncated <- coxph(
+  surv_lt ~ apoe_e4 + GRS + sex + educ,
+  data = cox_data,
+  ties = "efron"
+)
+
+model_since_baseline <- coxph(
+  surv_baseline ~ baseline_age + apoe_e4 + GRS + sex + educ,
+  data = cox_data_since_baseline,
+  ties = "efron"
+)
+
+model_since_baseline_risk <- coxph(
+  Surv(fu_time, event) ~ apoe_e4 + GRS + fhx_2plus + score_cogd,
+  data = cox_data_since_baseline_risk,
+  ties = "efron"
+)
+
+model_since_baseline_risk_interaction <- coxph(
+  Surv(fu_time, event) ~ apoe_e4 * score_cogd,
+  data = cox_data_since_baseline_risk,
+  ties = "efron"
+)
+
+model_since_baseline_cogd_burden <- coxph(
+  Surv(fu_time, event) ~ risk_score_cogd,
+  data = cox_data_since_baseline_risk,
+  ties = "efron"
+)
+
+model_since_baseline_cogd_burden_factor <- coxph(
+  Surv(fu_time, event) ~ risk_score_cogd_f,
+  data = cox_data_since_baseline_risk,
+  ties = "efron"
+)
+
+model_since_baseline_cogd_burden_binary <- coxph(
+  Surv(fu_time, event) ~ risk_score_cogd_bin,
+  data = cox_data_since_baseline_risk,
+  ties = "efron"
+)
+
+model_since_baseline_libra <- coxph(
+  Surv(fu_time, event) ~ baseline_age + sex + educ + apoe_e4 + GRS + fhx_2plus + score_libra2,
+  data = cox_data_since_baseline_libra,
+  ties = "efron"
+)
+
+model_since_baseline_libra_interaction <- coxph(
+  Surv(fu_time, event) ~ baseline_age + sex + educ + apoe_e4 * score_libra2,
+  data = cox_data_since_baseline_libra,
+  ties = "efron"
+)
+
+model_since_baseline_libra_burden <- coxph(
+  Surv(fu_time, event) ~ baseline_age + sex + educ + risk_score_libra2,
+  data = cox_data_since_baseline_libra,
+  ties = "efron"
+)
+
+model_since_baseline_libra_burden_factor <- coxph(
+  Surv(fu_time, event) ~ baseline_age + sex + educ + risk_score_libra2_f,
+  data = cox_data_since_baseline_libra,
+  ties = "efron"
+)
+
+model_since_baseline_libra_burden_binary <- coxph(
+  Surv(fu_time, event) ~ baseline_age + sex + educ + risk_score_libra2_bin,
+  data = cox_data_since_baseline_libra,
+  ties = "efron"
+)
+
+tidy_model <- function(model, model_label, analysis_label) {
+  tidy(model, exponentiate = TRUE, conf.int = TRUE) %>%
+    transmute(
+      analysis = analysis_label,
+      model = model_label,
+      term,
+      HR = estimate,
+      conf.low,
+      conf.high,
+      p_value = p.value
+    )
+}
+
+results_primary <- bind_rows(
+  tidy_model(model_standard, "Standard", "Primary: APOE + GRS + sex + educ"),
+  tidy_model(model_left_truncated, "Left-truncated", "Primary: APOE + GRS + sex + educ"),
+  tidy_model(model_since_baseline, "Time-since-baseline", "Primary: APOE + GRS + sex + educ")
+)
+
+results_risk <- bind_rows(
+  tidy_model(model_since_baseline_risk, "Time-since-baseline", "CogDrisk: APOE + GRS + family history + CogDrisk"),
+  tidy_model(model_since_baseline_risk_interaction, "Time-since-baseline", "CogDrisk: APOE x CogDrisk interaction"),
+  tidy_model(model_since_baseline_cogd_burden, "Time-since-baseline", "CogDrisk cumulative burden"),
+  tidy_model(model_since_baseline_cogd_burden_factor, "Time-since-baseline", "CogDrisk cumulative burden factor"),
+  tidy_model(model_since_baseline_cogd_burden_binary, "Time-since-baseline", "CogDrisk cumulative burden binary")
+)
+
+results_libra <- bind_rows(
+  tidy_model(model_since_baseline_libra, "Time-since-baseline", "LIBRA2: APOE + GRS + family history + LIBRA2 + age + sex + educ"),
+  tidy_model(model_since_baseline_libra_interaction, "Time-since-baseline", "LIBRA2: APOE x LIBRA2 interaction + age + sex + educ"),
+  tidy_model(model_since_baseline_libra_burden, "Time-since-baseline", "LIBRA2 cumulative burden"),
+  tidy_model(model_since_baseline_libra_burden_factor, "Time-since-baseline", "LIBRA2 cumulative burden factor"),
+  tidy_model(model_since_baseline_libra_burden_binary, "Time-since-baseline", "LIBRA2 cumulative burden binary")
+)
+
+all_results <- bind_rows(results_primary, results_risk, results_libra)
+
+results_primary
+```
+
+## Table 1
+
+```{r table1}
+table1_data %>%
+  transmute(
+    `p-tau217 status` = event_group,
+    Age = baseline_age,
+    Sex = sex,
+    `Family history` = fhx_2plus,
+    APOE = apoe_e4,
+    GRS = GRS,
+    CogDrisk = score_cogd,
+    LIBRA2 = score_libra2,
+    `CogDrisk cumulative burden` = risk_score_cogd_f,
+    `LIBRA2 cumulative burden` = risk_score_libra2_f
+  ) %>%
+  tbl_summary(
+    by = `p-tau217 status`,
+    statistic = list(
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    digits = list(all_continuous() ~ 2),
+    missing = "no"
+  ) %>%
+  modify_header(label ~ "**Variable**") %>%
+  bold_labels() %>%
+  as_gt() %>%
+  tab_header(
+    title = "Table 1. Time-Since-Baseline Cohort Characteristics",
+    subtitle = "Columns reflect participants classified as A- versus A+ in the time-since-baseline analysis cohort"
+  )
+```
+
+## UpSet Plot
+
+```{r upset-plot}
+#| fig-width: 11
+#| fig-height: 6
+
+upset_df <- table1_data %>%
+  transmute(
+    `p-tau217 status` = event_group,
+    APOE4 = apoe_burden,
+    `2+ FHx` = fhx_burden,
+    `High GRS` = grs_burden,
+    `High CogDrisk` = cogdrisk_burden,
+    `High LIBRA2` = libra2_burden
+  ) %>%
+  as.data.frame()
+
+upset(
+  upset_df,
+  c("APOE4", "2+ FHx", "High GRS", "High CogDrisk", "High LIBRA2"),
+  name = "Risk Indicator",
+  width_ratio = 0.12,
+  min_degree = 0,
+  set_sizes = (
+    upset_set_size() +
+      ylab("Set Size") +
+      theme(
+        text = element_text(size = 9),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)
+      )
+  ),
+  base_annotations = list(
+    "Intersection size" = (
+      intersection_size(
+        mapping = aes(fill = `p-tau217 status`)
+      ) +
+        scale_fill_manual(values = c("A-" = "#2166AC", "A+" = "#B2182B")) +
+        ylab("Intersection size") +
+        theme(
+          text = element_text(size = 9),
+          legend.position = c(0.88, 0.82)
+        )
+    )
+  )
+) +
+  ggtitle("Overlap of Binary Risk Indicators in the Time-Since-Baseline Cohort") +
+  theme(text = element_text(size = 9))
+```
+
+## APOE-Stratified Survival Plots
+
+```{r survival-figure}
+#| fig-width: 12
+#| fig-height: 5
+
+plot_survival <- function(fit, model_label) {
+  broom::tidy(fit) %>%
+    mutate(
+      strata = gsub("^apoe_e4=", "", strata),
+      strata = factor(strata, levels = c("non-e4+", "e4+"))
+    ) %>%
+    ggplot(aes(x = time, y = estimate, colour = strata, fill = strata)) +
+    geom_step(linewidth = 0.8) +
+    geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.15, colour = NA) +
+    scale_colour_manual(values = c("non-e4+" = "#2166AC", "e4+" = "#B2182B"),
+                        name = "APOE ε4") +
+    scale_fill_manual(values = c("non-e4+" = "#2166AC", "e4+" = "#B2182B"),
+                      name = "APOE ε4") +
+    labs(
+      title = model_label,
+      x = "Age (years)",
+      y = "Probability of Remaining p-tau217 Negative"
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(legend.position = "bottom")
+}
+
+sf_standard <- survfit(Surv(surv_age, event) ~ apoe_e4, data = cox_data)
+sf_left_truncated <- survfit(Surv(age_first, surv_age_lt, event) ~ apoe_e4, data = cox_data)
+sf_since_baseline <- survfit(Surv(fu_time, event) ~ apoe_e4, data = cox_data_since_baseline)
+
+plot_standard <- plot_survival(sf_standard, "Standard")
+plot_lt <- plot_survival(sf_left_truncated, "Left-truncated")
+plot_baseline <- plot_survival(sf_since_baseline, "Time-since-baseline")
+
+combined_plot <- (plot_standard | plot_lt) +
+  plot_annotation(
+    title = "APOE ε4 and SILA-Derived p-tau217 Positivity",
+    subtitle = "Left-truncated panel approximates pre-baseline SILA events at study entry"
+  ) &
+  theme(legend.position = "bottom")
+
+combined_plot
+```
+
+```{r survival-figure-baseline}
+#| fig-width: 6
+#| fig-height: 5
+
+plot_baseline +
+  plot_annotation(
+    title = "APOE ε4 and p-tau217 Positivity: Time Since Baseline",
+    subtitle = "Pre-baseline SILA events excluded"
+  ) &
+  theme(legend.position = "bottom")
+```
+
+## Results Table
+
+```{r results-table}
+results_display <- results_primary %>%
+  mutate(
+    term = recode(
+      term,
+      "apoe_e4e4+" = "APOE ε4 carrier (vs non-carrier)",
+      "baseline_age" = "Baseline age (years)",
+      "GRS" = "GRS (continuous)",
+      "sexMale" = "Male sex (vs female)",
+      "educ" = "Education (years)"
+    ),
+    hr_ci = sprintf("%.2f (%.2f-%.2f)", HR, conf.low, conf.high),
+    p_fmt = format.pval(p_value, digits = 3, eps = 0.001)
+  ) %>%
+  select(model, term, hr_ci, p_fmt) %>%
+  pivot_wider(
+    names_from = model,
+    values_from = c(hr_ci, p_fmt),
+    names_glue = "{model}_{.value}"
+  ) %>%
+  rename(
+    Term = term,
+    `Standard HR (95% CI)` = `Standard_hr_ci`,
+    `Standard p` = `Standard_p_fmt`,
+    `LT HR (95% CI)` = `Left-truncated_hr_ci`,
+    `LT p` = `Left-truncated_p_fmt`,
+    `Baseline-time HR (95% CI)` = `Time-since-baseline_hr_ci`,
+    `Baseline-time p` = `Time-since-baseline_p_fmt`
+  )
+
+results_display %>%
+  gt() %>%
+  tab_header(
+    title = "APOE, GRS, Sex, and Education: Cox Models for p-tau217 Positivity",
+    subtitle = "Standard, left-truncated, and time-since-baseline Cox models"
+  ) %>%
+  tab_spanner(
+    label = "Standard",
+    columns = c(`Standard HR (95% CI)`, `Standard p`)
+  ) %>%
+  tab_spanner(
+    label = "Left-truncated",
+    columns = c(`LT HR (95% CI)`, `LT p`)
+  ) %>%
+  tab_spanner(
+    label = "Time-since-baseline",
+    columns = c(`Baseline-time HR (95% CI)`, `Baseline-time p`)
+  ) %>%
+  tab_footnote(
+    footnote = "HR > 1 indicates faster progression to estimated p-tau217 positivity on the corresponding timescale.",
+    locations = cells_title()
+  )
+```
+
+## CogDrisk Model
+
+```{r results-table-risk}
+risk_results_display <- results_risk %>%
+  filter(analysis %in% c(
+    "CogDrisk: APOE + GRS + family history + CogDrisk",
+    "CogDrisk: APOE x CogDrisk interaction"
+  )) %>%
+  mutate(
+    analysis = recode(
+      analysis,
+      "CogDrisk: APOE + GRS + family history + CogDrisk" = "Main effects",
+      "CogDrisk: APOE x CogDrisk interaction" = "APOE x CogDrisk interaction"
+    ),
+    term = recode(
+      term,
+      "apoe_e4e4+" = "APOE ε4 carrier (vs non-carrier)",
+      "GRS" = "GRS (continuous)",
+      "fhx_2plus2+ FDR" = "Family history 2+ FDR (vs <2 FDR)",
+      "score_cogd" = "CogDrisk score (continuous)",
+      "apoe_e4e4+:score_cogd" = "APOE ε4 x CogDrisk interaction"
+    ),
+    hr_ci = sprintf("%.2f (%.2f-%.2f)", HR, conf.low, conf.high),
+    p_fmt = format.pval(p_value, digits = 3, eps = 0.001)
+  ) %>%
+  select(Model = analysis, Term = term, `HR (95% CI)` = hr_ci, p = p_fmt)
+
+risk_results_display %>%
+  gt() %>%
+  tab_header(
+    title = "CogDrisk Models",
+    subtitle = "Time-since-baseline Cox models"
+  ) %>%
+  tab_footnote(
+    footnote = "Family history is coded as 2+ FDR versus <2 FDR. Baseline age is omitted from these models because age is embedded in CogDrisk. The interaction model excludes GRS and family history by design. HR > 1 indicates faster progression to estimated p-tau217 positivity.",
+    locations = cells_title()
+  )
+```
+
+```{r results-table-risk-burden}
+risk_burden_display <- results_risk %>%
+  filter(analysis == "CogDrisk cumulative burden") %>%
+  mutate(
+    term = recode(
+      term,
+      "risk_score_cogd" = "Cumulative burden score (APOE + family history + high GRS + high CogDrisk)"
+    ),
+    `HR (95% CI)` = sprintf("%.2f (%.2f-%.2f)", HR, conf.low, conf.high),
+    p = format.pval(p_value, digits = 3, eps = 0.001)
+  ) %>%
+  select(Term = term, `HR (95% CI)`, p)
+
+risk_burden_display %>%
+  gt() %>%
+  tab_header(
+    title = "CogDrisk Cumulative Burden",
+    subtitle = "Time-since-baseline Cox model"
+  ) %>%
+  tab_footnote(
+    footnote = "High GRS is defined as the top quartile. High CogDrisk is defined as >1 SD above the baseline mean.",
+    locations = cells_title()
+  )
+```
+
+```{r results-table-risk-burden-factor}
+risk_burden_factor_display <- results_risk %>%
+  filter(analysis == "CogDrisk cumulative burden factor") %>%
+  mutate(
+    Term = case_when(
+      term == "risk_score_cogd_f1" ~ "Cumulative burden = 1 (vs 0)",
+      term == "risk_score_cogd_f2" ~ "Cumulative burden = 2 (vs 0)",
+      term == "risk_score_cogd_f3+" ~ "Cumulative burden = 3+ (vs 0)",
+      TRUE ~ term
+    ),
+    `HR (95% CI)` = sprintf("%.2f (%.2f-%.2f)", HR, conf.low, conf.high),
+    p = format.pval(p_value, digits = 3, eps = 0.001)
+  ) %>%
+  select(Term, `HR (95% CI)`, p)
+
+risk_burden_factor_display %>%
+  gt() %>%
+  tab_header(
+    title = "CogDrisk Cumulative Burden as a Factor",
+    subtitle = "Time-since-baseline Cox model"
+  ) %>%
+  tab_footnote(
+    footnote = "Reference group is burden score 0. High GRS is defined as the top quartile. High CogDrisk is defined as >1 SD above the baseline mean. Scores of 3 and 4 are combined as 3+.",
+    locations = cells_title()
+  )
+```
+
+```{r results-table-risk-burden-binary}
+risk_burden_binary_display <- results_risk %>%
+  filter(analysis == "CogDrisk cumulative burden binary") %>%
+  mutate(
+    Term = case_when(
+      term == "risk_score_cogd_bin2+" ~ "Cumulative burden 2+ (vs 0-1)",
+      TRUE ~ term
+    ),
+    `HR (95% CI)` = sprintf("%.2f (%.2f-%.2f)", HR, conf.low, conf.high),
+    p = format.pval(p_value, digits = 3, eps = 0.001)
+  ) %>%
+  select(Term, `HR (95% CI)`, p)
+
+risk_burden_binary_display %>%
+  gt() %>%
+  tab_header(
+    title = "CogDrisk Cumulative Burden Dichotomized",
+    subtitle = "Time-since-baseline Cox model"
+  ) %>%
+  tab_footnote(
+    footnote = "Reference group is burden score 0-1 and the exposed group is burden score 2+.",
+    locations = cells_title()
+  )
+```
+
+## LIBRA2 Model
+
+```{r results-table-libra}
+libra_results_display <- results_libra %>%
+  filter(analysis %in% c(
+    "LIBRA2: APOE + GRS + family history + LIBRA2 + age + sex + educ",
+    "LIBRA2: APOE x LIBRA2 interaction + age + sex + educ"
+  )) %>%
+  mutate(
+    analysis = recode(
+      analysis,
+      "LIBRA2: APOE + GRS + family history + LIBRA2 + age + sex + educ" = "Main effects",
+      "LIBRA2: APOE x LIBRA2 interaction + age + sex + educ" = "APOE x LIBRA2 interaction"
+    ),
+    term = recode(
+      term,
+      "baseline_age" = "Baseline age (years)",
+      "sexMale" = "Male sex (vs female)",
+      "educ" = "Education (years)",
+      "apoe_e4e4+" = "APOE ε4 carrier (vs non-carrier)",
+      "GRS" = "GRS (continuous)",
+      "fhx_2plus2+ FDR" = "Family history 2+ FDR (vs <2 FDR)",
+      "score_libra2" = "LIBRA2 score (continuous)",
+      "apoe_e4e4+:score_libra2" = "APOE ε4 x LIBRA2 interaction"
+    ),
+    `HR (95% CI)` = sprintf("%.2f (%.2f-%.2f)", HR, conf.low, conf.high),
+    p = format.pval(p_value, digits = 3, eps = 0.001)
+  ) %>%
+  select(Model = analysis, Term = term, `HR (95% CI)`, p)
+
+libra_results_display %>%
+  gt() %>%
+  tab_header(
+    title = "LIBRA2 Models",
+    subtitle = "Time-since-baseline Cox models"
+  ) %>%
+  tab_footnote(
+    footnote = "Family history is coded as 2+ FDR versus <2 FDR. Baseline age, sex, and education are included as covariates because they are not embedded in LIBRA2. The interaction model excludes GRS and family history by design.",
+    locations = cells_title()
+  )
+```
+
+```{r results-table-libra-burden}
+libra_burden_display <- results_libra %>%
+  filter(analysis == "LIBRA2 cumulative burden") %>%
+  mutate(
+    term = recode(
+      term,
+      "baseline_age" = "Baseline age (years)",
+      "sexMale" = "Male sex (vs female)",
+      "educ" = "Education (years)",
+      "risk_score_libra2" = "Cumulative burden score (APOE + family history + high GRS + high LIBRA2)"
+    ),
+    `HR (95% CI)` = sprintf("%.2f (%.2f-%.2f)", HR, conf.low, conf.high),
+    p = format.pval(p_value, digits = 3, eps = 0.001)
+  ) %>%
+  select(Term = term, `HR (95% CI)`, p)
+
+libra_burden_display %>%
+  gt() %>%
+  tab_header(
+    title = "LIBRA2 Cumulative Burden",
+    subtitle = "Time-since-baseline Cox model"
+  ) %>%
+  tab_footnote(
+    footnote = "High GRS is defined as the top quartile. High LIBRA2 is defined as >1 SD above the baseline mean.",
+    locations = cells_title()
+  )
+```
+
+```{r results-table-libra-burden-factor}
+libra_burden_factor_display <- results_libra %>%
+  filter(analysis == "LIBRA2 cumulative burden factor") %>%
+  mutate(
+    Term = case_when(
+      term == "baseline_age" ~ "Baseline age (years)",
+      term == "sexMale" ~ "Male sex (vs female)",
+      term == "educ" ~ "Education (years)",
+      term == "risk_score_libra2_f1" ~ "Cumulative burden = 1 (vs 0)",
+      term == "risk_score_libra2_f2" ~ "Cumulative burden = 2 (vs 0)",
+      term == "risk_score_libra2_f3+" ~ "Cumulative burden = 3+ (vs 0)",
+      TRUE ~ term
+    ),
+    `HR (95% CI)` = sprintf("%.2f (%.2f-%.2f)", HR, conf.low, conf.high),
+    p = format.pval(p_value, digits = 3, eps = 0.001)
+  ) %>%
+  select(Term, `HR (95% CI)`, p)
+
+libra_burden_factor_display %>%
+  gt() %>%
+  tab_header(
+    title = "LIBRA2 Cumulative Burden as a Factor",
+    subtitle = "Time-since-baseline Cox model"
+  ) %>%
+  tab_footnote(
+    footnote = "Reference group is burden score 0. High GRS is defined as the top quartile. High LIBRA2 is defined as >1 SD above the baseline mean. Scores of 3 and 4 are combined as 3+.",
+    locations = cells_title()
+  )
+```
+
+```{r results-table-libra-burden-binary}
+libra_burden_binary_display <- results_libra %>%
+  filter(analysis == "LIBRA2 cumulative burden binary") %>%
+  mutate(
+    Term = case_when(
+      term == "baseline_age" ~ "Baseline age (years)",
+      term == "sexMale" ~ "Male sex (vs female)",
+      term == "educ" ~ "Education (years)",
+      term == "risk_score_libra2_bin2+" ~ "Cumulative burden 2+ (vs 0-1)",
+      TRUE ~ term
+    ),
+    `HR (95% CI)` = sprintf("%.2f (%.2f-%.2f)", HR, conf.low, conf.high),
+    p = format.pval(p_value, digits = 3, eps = 0.001)
+  ) %>%
+  select(Term, `HR (95% CI)`, p)
+
+libra_burden_binary_display %>%
+  gt() %>%
+  tab_header(
+    title = "LIBRA2 Cumulative Burden Dichotomized",
+    subtitle = "Time-since-baseline Cox model"
+  ) %>%
+  tab_footnote(
+    footnote = "Reference group is burden score 0-1 and the exposed group is burden score 2+.",
+    locations = cells_title()
+  )
+```
+
+## Cumulative Burden Visualizations
+
+```{r cumulative-burden-forest}
+#| fig-width: 11
+#| fig-height: 5.5
+
+burden_forest_data <- bind_rows(
+  results_risk %>%
+    filter(analysis == "CogDrisk cumulative burden factor") %>%
+    mutate(
+      framework = "CogDrisk",
+      burden = case_when(
+        term == "risk_score_cogd_f1" ~ "1",
+        term == "risk_score_cogd_f2" ~ "2",
+        term == "risk_score_cogd_f3+" ~ "3+",
+        TRUE ~ NA_character_
+      )
+    ),
+  results_libra %>%
+    filter(analysis == "LIBRA2 cumulative burden factor") %>%
+    mutate(
+      framework = "LIBRA2",
+      burden = case_when(
+        term == "risk_score_libra2_f1" ~ "1",
+        term == "risk_score_libra2_f2" ~ "2",
+        term == "risk_score_libra2_f3+" ~ "3+",
+        TRUE ~ NA_character_
+      )
+    )
+) %>%
+  filter(!is.na(burden)) %>%
+  mutate(
+    burden = factor(burden, levels = c("1", "2", "3+")),
+    label = factor(
+      paste0("Burden ", burden),
+      levels = c("Burden 3+", "Burden 2", "Burden 1", "Burden 0 (ref)")
+    )
+  )
+
+burden_reference_data <- tibble(
+  framework = c("CogDrisk", "LIBRA2"),
+  burden = factor("0", levels = c("1", "2", "3+")),
+  label = factor("Burden 0 (ref)", levels = c("Burden 3+", "Burden 2", "Burden 1", "Burden 0 (ref)")),
+  HR = 1,
+  conf.low = 1,
+  conf.high = 1
+)
+
+bind_rows(
+  burden_forest_data %>% select(framework, label, HR, conf.low, conf.high),
+  burden_reference_data
+) %>%
+  ggplot(aes(x = HR, y = label)) +
+  geom_vline(xintercept = 1, linetype = "dashed", color = "grey50") +
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.15, color = "#4D4D4D") +
+  geom_point(size = 2.6, color = "#1B5E8A") +
+  facet_wrap(~ framework, scales = "free_y") +
+  scale_x_log10() +
+  labs(
+    title = "Adjusted Hazard Ratios by Cumulative Burden Category",
+    subtitle = "Reference group is cumulative burden score 0",
+    x = "Hazard ratio (log scale)",
+    y = NULL
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.minor = element_blank(),
+    strip.text = element_text(face = "bold")
+  )
+```
+
+```{r}
+
+# --- LIBRA2 cumulative burden only ---
+libra2_forest_data <- results_libra %>%
+  filter(analysis == "LIBRA2 cumulative burden factor") %>%
+  mutate(
+    burden = case_when(
+      term == "risk_score_libra2_f1"  ~ "1",
+      term == "risk_score_libra2_f2"  ~ "2",
+      term == "risk_score_libra2_f3+" ~ "3+",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(burden)) %>%
+  transmute(
+    label = factor(
+      burden,
+      levels = c("3+", "2", "1", "0")
+    ),
+    HR,
+    conf.low,
+    conf.high
+  )
+
+libra2_reference <- tibble(
+  label = factor("0", levels = c("3+", "2", "1", "0")),
+  HR = 1,
+  conf.low = 1,
+  conf.high = 1
+)
+
+plot_df <- bind_rows(libra2_forest_data, libra2_reference)
+
+p_libra2 <- ggplot(plot_df, aes(x = HR, y = label)) +
+  geom_vline(xintercept = 1, linetype = "dashed", linewidth = 0.3, color = "grey50") +
+  geom_errorbarh(
+    aes(xmin = conf.low, xmax = conf.high),
+    height = 0.12,
+    linewidth = 0.3,
+    color = "black"
+  ) +
+  geom_point(size = 1.6, color = "#1B5E8A") +
+  scale_x_log10(
+    breaks = c(1, 3, 10),
+    labels = c("1", "3", "10")
+  ) +
+  labs(
+    x = "Hazard ratio",
+    y = NULL
+  ) +
+  coord_cartesian(xlim = c(0.8, 18)) +
+  theme_minimal(base_size = 8) +
+  theme(
+    axis.title.x = element_text(size = 8),
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_text(size = 7),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.major.x = element_line(linewidth = 0.2, color = "grey85"),
+    plot.margin = margin(2, 2, 2, 2)
+  )
+
+p_libra2
+
+ggsave(
+  filename = "libra2_cumulative_burden_prelim.png",
+  plot = p_libra2,
+  width = 2,
+  height = 1.6,
+  units = "in",
+  dpi = 600
+)
+```
+
+
+```{r cumulative-burden-km}
+#| fig-width: 11
+#| fig-height: 5.5
+
+plot_burden_survival <- function(fit, title_text) {
+  broom::tidy(fit) %>%
+    mutate(
+      strata = sub("^.*=", "", strata),
+      strata = factor(strata, levels = c("0", "1", "2", "3+"))
+    ) %>%
+    ggplot(aes(x = time, y = estimate, color = strata, fill = strata)) +
+    geom_step(linewidth = 0.85) +
+    geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = 0.12, colour = NA) +
+    scale_color_manual(
+      values = c("0" = "#2166AC", "1" = "#67A9CF", "2" = "#EF8A62", "3+" = "#B2182B"),
+      name = "Burden"
+    ) +
+    scale_fill_manual(
+      values = c("0" = "#2166AC", "1" = "#67A9CF", "2" = "#EF8A62", "3+" = "#B2182B"),
+      name = "Burden"
+    ) +
+    labs(
+      title = title_text,
+      x = "Years since baseline",
+      y = "Probability of Remaining p-tau217 Negative"
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(legend.position = "bottom")
+}
+
+sf_cogd_burden <- survfit(Surv(fu_time, event) ~ risk_score_cogd_f, data = cox_data_since_baseline_risk)
+sf_libra_burden <- survfit(Surv(fu_time, event) ~ risk_score_libra2_f, data = cox_data_since_baseline_libra)
+
+(plot_burden_survival(sf_cogd_burden, "CogDrisk cumulative burden") |
+  plot_burden_survival(sf_libra_burden, "LIBRA2 cumulative burden")) +
+  plot_annotation(
+    title = "Time-Since-Baseline Survival by Cumulative Burden Group",
+    subtitle = "Curves are descriptive and unadjusted; factor-based Cox models provide adjusted hazard ratios"
+  ) &
+  theme(legend.position = "bottom")
+```
+
+```{r cumulative-burden-adjusted}
+#| fig-width: 11
+#| fig-height: 5.5
+
+burden_palette <- c("0" = "#2166AC", "1" = "#67A9CF", "2" = "#EF8A62", "3+" = "#B2182B")
+
+mode_value <- function(x) {
+  ux <- na.omit(unique(x))
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+cogd_newdata <- tibble(
+  risk_score_cogd_f = factor(c("0", "1", "2", "3+"), levels = c("0", "1", "2", "3+"))
+)
+
+libra_newdata <- tibble(
+  baseline_age = mean(cox_data_since_baseline_libra$baseline_age, na.rm = TRUE),
+  sex = mode_value(cox_data_since_baseline_libra$sex),
+  educ = mean(cox_data_since_baseline_libra$educ, na.rm = TRUE),
+  risk_score_libra2_f = factor(c("0", "1", "2", "3+"), levels = c("0", "1", "2", "3+"))
+)
+
+sf_cogd_adjusted <- survfit(model_since_baseline_cogd_burden_factor, newdata = cogd_newdata)
+sf_libra_adjusted <- survfit(model_since_baseline_libra_burden_factor, newdata = libra_newdata)
+
+adjusted_cogd_plot <- ggsurvplot(
+  sf_cogd_adjusted,
+  data = as.data.frame(cox_data_since_baseline_risk),
+  conf.int = TRUE,
+  censor = FALSE,
+  legend.title = "Burden",
+  legend.labs = c("0", "1", "2", "3+"),
+  palette = burden_palette,
+  ggtheme = theme_minimal(base_size = 12),
+  xlab = "Years since baseline",
+  ylab = "Adjusted probability of remaining p-tau217 negative",
+  title = "CogDrisk cumulative burden"
+)$plot +
+  theme(legend.position = "bottom")
+
+adjusted_libra_plot <- ggsurvplot(
+  sf_libra_adjusted,
+  data = as.data.frame(cox_data_since_baseline_libra),
+  conf.int = TRUE,
+  censor = FALSE,
+  legend.title = "Burden",
+  legend.labs = c("0", "1", "2", "3+"),
+  palette = burden_palette,
+  ggtheme = theme_minimal(base_size = 12),
+  xlab = "Years since baseline",
+  ylab = "Adjusted probability of remaining p-tau217 negative",
+  title = "LIBRA2 cumulative burden"
+)$plot +
+  theme(legend.position = "bottom")
+
+(adjusted_cogd_plot | adjusted_libra_plot) +
+  plot_annotation(
+    title = "Adjusted Survival Curves by Cumulative Burden Group",
+    subtitle = "Curves are model-based predictions with 95% confidence bands from survfit() and survminer::ggsurvplot()"
+  ) &
+  theme(legend.position = "bottom")
+```
+
+```{r cumulative-burden-adjusted-binary}
+#| fig-width: 11
+#| fig-height: 5.5
+
+cogd_bin_newdata <- tibble(
+  risk_score_cogd_bin = factor(c("0-1", "2+"), levels = c("0-1", "2+"))
+)
+
+libra_bin_newdata <- tibble(
+  baseline_age = mean(cox_data_since_baseline_libra$baseline_age, na.rm = TRUE),
+  sex = mode_value(cox_data_since_baseline_libra$sex),
+  educ = mean(cox_data_since_baseline_libra$educ, na.rm = TRUE),
+  risk_score_libra2_bin = factor(c("0-1", "2+"), levels = c("0-1", "2+"))
+)
+
+sf_cogd_adjusted_bin <- survfit(model_since_baseline_cogd_burden_binary, newdata = cogd_bin_newdata)
+sf_libra_adjusted_bin <- survfit(model_since_baseline_libra_burden_binary, newdata = libra_bin_newdata)
+
+binary_palette <- c("0-1" = "#2166AC", "2+" = "#B2182B")
+
+adjusted_cogd_plot_bin <- ggsurvplot(
+  sf_cogd_adjusted_bin,
+  data = as.data.frame(cox_data_since_baseline_risk),
+  conf.int = TRUE,
+  censor = FALSE,
+  legend.title = "Burden",
+  legend.labs = c("0-1", "2+"),
+  palette = binary_palette,
+  ggtheme = theme_minimal(base_size = 12),
+  xlab = "Years since baseline",
+  ylab = "Adjusted probability of remaining p-tau217 negative",
+  title = "CogDrisk burden dichotomized"
+)$plot +
+  theme(legend.position = "bottom")
+
+adjusted_libra_plot_bin <- ggsurvplot(
+  sf_libra_adjusted_bin,
+  data = as.data.frame(cox_data_since_baseline_libra),
+  conf.int = TRUE,
+  censor = FALSE,
+  legend.title = "Burden",
+  legend.labs = c("0-1", "2+"),
+  palette = binary_palette,
+  ggtheme = theme_minimal(base_size = 12),
+  xlab = "Years since baseline",
+  ylab = "Adjusted probability of remaining p-tau217 negative",
+  title = "LIBRA2 burden dichotomized"
+)$plot +
+  theme(legend.position = "bottom")
+
+(adjusted_cogd_plot_bin | adjusted_libra_plot_bin) +
+  plot_annotation(
+    title = "Adjusted Survival Curves by Dichotomized Cumulative Burden",
+    subtitle = "Curves are model-based predictions with 95% confidence bands for burden 0-1 versus 2+"
+  ) &
+  theme(legend.position = "bottom")
+```
+
+## Save Results
+
+```{r save-results}
+dir.create(here("results", "Aim2", "tables"), recursive = TRUE, showWarnings = FALSE)
+dir.create(here("results", "Aim2", "figures"), recursive = TRUE, showWarnings = FALSE)
+
+write_csv(
+  all_results,
+  here("results", "Aim2", "tables", "PREVENTAD_cox_sila_apoe_results.csv")
+)
+
+write_csv(
+  results_primary,
+  here("results", "Aim2", "tables", "PREVENTAD_cox_sila_apoe_primary.csv")
+)
+
+ggsave(
+  filename = here("results", "Aim2", "figures", "PREVENTAD_cox_sila_apoe_survival.png"),
+  plot = combined_plot,
+  width = 12,
+  height = 5,
+  dpi = 300
+)
+
+ggsave(
+  filename = here("results", "Aim2", "figures", "PREVENTAD_cox_sila_apoe_survival_baseline_time.png"),
+  plot = plot_baseline,
+  width = 6,
+  height = 5,
+  dpi = 300
+)
+
+cat("Results saved to:\n")
+cat("- results/Aim2/tables/PREVENTAD_cox_sila_apoe_results.csv\n")
+cat("- results/Aim2/tables/PREVENTAD_cox_sila_apoe_primary.csv\n")
+cat("- results/Aim2/figures/PREVENTAD_cox_sila_apoe_survival.png\n")
+cat("- results/Aim2/figures/PREVENTAD_cox_sila_apoe_survival_baseline_time.png\n")
+```
