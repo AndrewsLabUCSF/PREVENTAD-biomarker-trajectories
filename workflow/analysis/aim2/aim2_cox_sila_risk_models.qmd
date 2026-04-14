@@ -903,7 +903,7 @@ bind_rows(
   facet_wrap(~ framework, scales = "free_y") +
   scale_x_log10() +
   labs(
-    title = "Adjusted Hazard Ratios by Cumulative Burden Category",
+    title = "Composite Risk Score with Estimated Age of Amyloid Onset Hazard Ratios",
     subtitle = "Reference group is cumulative burden score 0",
     x = "Hazard ratio (log scale)",
     y = NULL

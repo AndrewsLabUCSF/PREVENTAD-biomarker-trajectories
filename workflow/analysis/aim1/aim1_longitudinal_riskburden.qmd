@@ -996,7 +996,7 @@ ggsave(file.path(AIM1_OUTPUT_PATH$figures, "PREVENTAD_ptau181_trajectories.png")
        p_ptau181, width = 12, height = 9, dpi = 300)
 ```
 
-## Focused Plot: CogDrisk + LIBRA2 ptau217 Trajectories (combined)
+## Focused Plot: LIBRA2 ptau217 Trajectories 
 
 ```{r ptau-combined-focused-plot}
 ptau217_obs <- risk_dat_long_plot %>%
@@ -1039,17 +1039,17 @@ p217_libra2 <- ggplot() +
   scale_x_continuous(limits = c(0, 12), breaks = seq(0, 12, 2)) +
   scale_y_continuous(expand = expansion(mult = c(0.02, 0.05))) +
   labs(x = "Years from Baseline", y = NULL,
-       title = "LIBRA2") +
+       title = "p-tau217 Trajectories by Composite Risk Score") +
   theme_bw(base_size = 12) +
-  theme(plot.title    = element_text(face = "bold", size = 8, hjust = 0.5),
+  theme(plot.title    = element_text(face = "bold", size = 10, hjust = 0.5),
+        axis.title=element_text(size = 8),
         legend.position = "bottom",
+        legend.key.size = unit(0.5, "cm"),      
+        legend.text = element_text(size = 5),  
+        legend.title = element_text(size = 6),   
+        legend.box.margin = margin(-10, 0, 0, 0),
         strip.background = element_rect(fill = "grey90"),
-        strip.text       = element_text(face = "bold")) +
-  plot_annotation(
-    title   = "p-tau217 Trajectories by Composite Risk Score",
-    theme   = theme(
-      plot.title   = element_text(face = "bold", size = 10, hjust = 0)
-    ))
+        strip.text       = element_text(face = "bold"))
 
 print(p217_libra2)
 
