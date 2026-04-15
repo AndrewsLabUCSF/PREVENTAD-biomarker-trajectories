@@ -1,0 +1,137 @@
+---
+title: "PREVENT-AD Demographic Summary"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warnings = FALSE)
+knitr::opts_knit$set(root.dir = here::here())
+```
+
+```{r setting}
+library(stringr)
+
+source('workflow/scripts/config.R')
+
+predictors    <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_predictors.rds"))
+biomarkers    <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_longitudinal.rds"))
+PREVENTAD_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_raw.rds"))
+baseline_dat      <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_baseline.rds"))
+mci_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_MCI.rds"))
+```
+
+# Baseline participant characteristics stratified by MCI status
+
+```{r table-2}
+mci_ids <- mci_dat %>% distinct(CONP_ID) %>% pull(CONP_ID)
+
+table1_data <- baseline_dat %>%
+  left_join(
+    PREVENTAD_dat$demographics %>%
+      select(CONP_ID, Ethnicity) %>%
+      mutate(Ethnicity = str_to_sentence(Ethnicity)),
+    by = "CONP_ID"
+  ) %>%
+  mutate(
+    female    = if_else(sex == "Female", 1, 0),
+    caucasian = if_else(Ethnicity == "Caucasian", 1, 0),
+    mci_status = factor(
+      if_else(CONP_ID %in% mci_ids, "Progressed to MCI", "Remained CN"),
+      levels = c("Remained CN", "Progressed to MCI")
+    )
+  ) %>%
+  select(
+    # Demographics
+    age, female, educ, caucasian,
+    # AD risk factors
+    apoe, family_history, GRS, score_cogd, score_libra2,
+    # Baseline biomarkers
+    ab_ratio, gfap, nfl, ptau181, ptau217, ptau217_ab42_ratio,
+    # Grouping variable
+    mci_status
+  )
+
+table1_gtsummary <- table2_data %>%
+  tbl_summary(
+    by = mci_status,
+    type = list(
+      female    ~ "dichotomous",
+      caucasian ~ "dichotomous"
+    ),
+    label = list(
+      age                  = "Age (years)",
+      female               = "Female",
+      educ                 = "Years of education",
+      caucasian            = "Caucasian",
+      apoe                 = "APOE genotype",
+      family_history       = "Family history of AD",
+      GRS                  = "Genetic risk score",
+      score_cogd           = "CogDrisk score",
+      score_libra2         = "LIBRA2 score",
+      ab_ratio             = "A\u03b242/A\u03b240 ratio",
+      gfap                 = "GFAP (pg/mL)",
+      nfl                  = "NfL (pg/mL)",
+      ptau181              = "p-tau181 (pg/mL)",
+      ptau217              = "p-tau217 (pg/mL)",
+      ptau217_ab42_ratio   = "p-tau217/A\u03b242 ratio"
+    ),
+    statistic = list(
+      all_continuous()  ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    missing = "no"
+  ) %>%
+  add_overall(last = FALSE) %>%
+  add_p(
+    test = list(
+      all_continuous()  ~ "wilcox.test",
+      all_categorical() ~ "chisq.test"
+    )
+  ) %>%
+  modify_header(label ~ "**Characteristic**") %>%
+  modify_table_body(
+    ~.x %>%
+      mutate(
+        grouping = case_when(
+          variable %in% c("age", "female", "educ", "caucasian")                            ~ "Demographics",
+          variable %in% c("apoe", "family_history", "GRS", "score_cogd", "score_libra2")  ~ "AD Risk Factors",
+          variable %in% c("ab_ratio", "gfap", "nfl", "ptau181",
+                          "ptau217", "ptau217_ab42_ratio")                                 ~ "Baseline Biomarkers",
+          TRUE ~ NA_character_
+        )
+      )
+  ) %>%
+  modify_footnote(all_stat_cols() ~ "Mean (SD) for continuous; n (%) for categorical") %>%
+  bold_labels() %>%
+  italicize_levels()
+
+table1_gt <- table2_gtsummary %>%
+  as_gt() %>%
+  tab_header(
+    title    = md("**Table 1.** Baseline Characteristics of PREVENT-AD Sample"),
+    subtitle = md("Stratified by MCI Progression Status (N = 285)")
+  ) %>%
+  tab_row_group(
+    label = md("**Baseline Biomarkers**"),
+    rows  = grouping == "Baseline Biomarkers"
+  ) %>%
+  tab_row_group(
+    label = md("**AD Risk Factors**"),
+    rows  = grouping == "AD Risk Factors"
+  ) %>%
+  tab_row_group(
+    label = md("**Demographics**"),
+    rows  = grouping == "Demographics"
+  ) %>%
+  row_group_order(groups = c("**Demographics**", "**AD Risk Factors**", "**Baseline Biomarkers**")) %>%
+  tab_style(
+    style     = list(cell_text(weight = "bold"),
+                     cell_fill(color = "#f8f9fa")),
+    locations = cells_row_groups()
+  ) %>%
+  cols_hide(columns = any_of(c("variable", "grouping", "row_type")))
+
+table1_gt
+
+gtsave(table1_gt, filename = file.path(EDA_OUTPUT_PATH$tables, "table1_baseline_characteristics.png"))
+```
