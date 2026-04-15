@@ -36,8 +36,8 @@ table1_data <- baseline_dat %>%
     female    = if_else(sex == "Female", 1, 0),
     caucasian = if_else(Ethnicity == "Caucasian", 1, 0),
     mci_status = factor(
-      if_else(CONP_ID %in% mci_ids, "Progressed to MCI", "Remained CN"),
-      levels = c("Remained CN", "Progressed to MCI")
+      if_else(CONP_ID %in% mci_ids, "Progressed to MCI", "Remained CU"),
+      levels = c("Remained CU", "Progressed to MCI")
     )
   ) %>%
   select(
@@ -51,7 +51,7 @@ table1_data <- baseline_dat %>%
     mci_status
   )
 
-table1_gtsummary <- table2_data %>%
+table1_gtsummary <- table1_data %>%
   tbl_summary(
     by = mci_status,
     type = list(
@@ -105,7 +105,7 @@ table1_gtsummary <- table2_data %>%
   bold_labels() %>%
   italicize_levels()
 
-table1_gt <- table2_gtsummary %>%
+table1_gt <- table1_gtsummary %>%
   as_gt() %>%
   tab_header(
     title    = md("**Table 1.** Baseline Characteristics of PREVENT-AD Sample"),
