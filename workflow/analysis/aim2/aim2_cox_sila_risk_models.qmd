@@ -903,7 +903,7 @@ bind_rows(
   facet_wrap(~ framework, scales = "free_y") +
   scale_x_log10() +
   labs(
-    title = "Composite Risk Score with Estimated Age of Amyloid Onset Hazard Ratios",
+    title = "Adjusted Hazard Ratios by Cumulative Burden Category",
     subtitle = "Reference group is cumulative burden score 0",
     x = "Hazard ratio (log scale)",
     y = NULL
@@ -946,35 +946,40 @@ libra2_reference <- tibble(
   conf.high = 1
 )
 
-plot_df <- bind_rows(libra2_forest_data, libra2_reference)
+plot_df <- bind_rows(libra2_forest_data, libra2_reference) %>%
+  mutate(burden_level = factor(as.character(label), levels = c("0", "1", "2", "3+")))
 
-p_libra2 <- ggplot(plot_df, aes(x = HR, y = label)) +
+p_libra2 <- ggplot(plot_df, aes(x = HR, y = label, color = burden_level)) +
   geom_vline(xintercept = 1, linetype = "dashed", linewidth = 0.3, color = "grey50") +
   geom_errorbarh(
     aes(xmin = conf.low, xmax = conf.high),
     height = 0.12,
-    linewidth = 0.3,
-    color = "black"
+    linewidth = 0.3
   ) +
-  geom_point(size = 1.6, color = "#1B5E8A") +
+  geom_point(size = 1.6) +
+  scale_color_viridis_d(option = "plasma", begin = 0.2, end = 0.9,
+                        name = "Cumulative Burden") +
   scale_x_log10(
     breaks = c(1, 3, 10),
     labels = c("1", "3", "10")
   ) +
   labs(
+    title = "Composite Risk score with Estimated Age of Amyloid Onset",
     x = "Hazard ratio",
     y = NULL
   ) +
   coord_cartesian(xlim = c(0.8, 18)) +
   theme_minimal(base_size = 8) +
   theme(
+    plot.title    = element_textbox_simple(face = "bold", size = 8, hjust = 0.5),
     axis.title.x = element_text(size = 8),
     axis.text.x = element_text(size = 7),
     axis.text.y = element_text(size = 7),
     panel.grid.minor = element_blank(),
     panel.grid.major.y = element_blank(),
     panel.grid.major.x = element_line(linewidth = 0.2, color = "grey85"),
-    plot.margin = margin(2, 2, 2, 2)
+    plot.margin = margin(2, 2, 2, 2),
+    legend.position="none"
   )
 
 p_libra2
