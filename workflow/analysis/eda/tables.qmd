@@ -20,9 +20,9 @@ baseline_dat      <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_baseline.rd
 mci_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_MCI.rds"))
 ```
 
-# Baseline participant characteristics stratified by MCI status
+# Table 1: Baseline participant characteristics stratified by MCI status
 
-```{r table-2}
+```{r table-1}
 mci_ids <- mci_dat %>% distinct(CONP_ID) %>% pull(CONP_ID)
 
 table1_data <- baseline_dat %>%
@@ -134,4 +134,132 @@ table1_gt <- table1_gtsummary %>%
 table1_gt
 
 gtsave(table1_gt, filename = file.path(EDA_OUTPUT_PATH$tables, "table1_baseline_characteristics.png"))
+```
+
+# Table 2: Cross-Sectional Associations between Composite Risk Burden and Plasma Biomarkers
+
+```{r table-2}
+outcome_order <- c("ab_ratio", "gfap_log", "nfl_log",
+                   "ptau181_log", "ptau217_log", "ptau217_ab42_ratio_log")
+
+term_order <- c("Clinical Risk Score", "APOE \u03b54 Carrier",
+                "Genetic Risk Score", "Family History (\u22652 FDR)")
+
+table2_long <- read_csv(
+  here("results/Aim1/tables/crosssectional_results.csv"),
+  show_col_types = FALSE
+) %>%
+  filter(model %in% c("CogDrisk_cont", "LIBRA2_cont")) %>%
+  mutate(
+    biomarker = case_when(
+      outcome == "ab_ratio"               ~ "A\u03b242/40 ratio",
+      outcome == "gfap_log"               ~ "GFAP (log)",
+      outcome == "nfl_log"                ~ "NfL (log)",
+      outcome == "ptau181_log"            ~ "p-tau181 (log)",
+      outcome == "ptau217_log"            ~ "p-tau217 (log)",
+      outcome == "ptau217_ab42_ratio_log" ~ "p-tau217/A\u03b242 ratio (log)"
+    ),
+    term_label = case_when(
+      term %in% c("score_cogd_z", "score_libra2_z") ~ "Clinical Risk Score",
+      term == "apoe_burden"                          ~ "APOE \u03b54 Carrier",
+      term == "GRS"                                  ~ "Genetic Risk Score",
+      term == "fhx_burden"                           ~ "Family History (\u22652 FDR)"
+    ),
+    beta_se = sprintf("%.3f (%.3f)", estimate, std.error),
+    ci      = sprintf("[%.3f, %.3f]", conf.low, conf.high),
+    p_fmt   = if_else(p.value < 0.001, "<0.001", sprintf("%.3f", p.value)),
+    stars = case_when(
+      p.value < 0.001 ~ "***",
+      p.value < 0.01  ~ "**",
+      p.value < 0.05  ~ "*",
+      TRUE            ~ ""
+    )
+  )
+
+# Pivot wide: one row per biomarker × term, columns split by model
+table2_wide <- table2_long %>%
+  select(composite_type, biomarker, outcome, term_label,
+         beta_se, ci, p_fmt, stars) %>%
+  pivot_wider(
+    names_from  = composite_type,
+    values_from = c(beta_se, ci, p_fmt, stars),
+    names_glue  = "{composite_type}_{.value}"
+  ) %>%
+  mutate(
+    biomarker  = factor(biomarker, levels = c(
+      "A\u03b242/40 ratio", "GFAP (log)", "NfL (log)",
+      "p-tau181 (log)", "p-tau217 (log)", "p-tau217/A\u03b242 ratio (log)"
+    )),
+    term_label = factor(term_label, levels = term_order)
+  ) %>%
+  arrange(biomarker, term_label) %>%
+  select(biomarker, term_label,
+         CogDrisk_beta_se, CogDrisk_ci, CogDrisk_p_fmt, CogDrisk_stars,
+         LIBRA2_beta_se,   LIBRA2_ci,   LIBRA2_p_fmt,   LIBRA2_stars)
+
+table2_gt <- table2_wide %>%
+  gt(groupname_col = "biomarker") %>%
+  tab_header(
+    title    = md("**Table 2.** Cross-Sectional Associations between Composite Risk Burden and Plasma Biomarkers"),
+    subtitle = md("Linear regression models; composite scores z-scored (\u03b2 per SD)")
+  ) %>%
+  # Column spanners
+  tab_spanner(
+    label   = md("**CogDrisk**"),
+    columns = starts_with("CogDrisk_")
+  ) %>%
+  tab_spanner(
+    label   = md("**LIBRA2**"),
+    columns = starts_with("LIBRA2_")
+  ) %>%
+  cols_label(
+    term_label        = md("**Predictor**"),
+    CogDrisk_beta_se  = md("**\u03b2 (SE)**"),
+    CogDrisk_ci       = md("**95% CI**"),
+    CogDrisk_p_fmt    = md("**p**"),
+    CogDrisk_stars    = md(""),
+    LIBRA2_beta_se    = md("**\u03b2 (SE)**"),
+    LIBRA2_ci         = md("**95% CI**"),
+    LIBRA2_p_fmt      = md("**p**"),
+    LIBRA2_stars      = md("")
+  ) %>%
+  # Highlight significant p-values
+  tab_style(
+    style     = cell_fill(color = "#e8f4e8"),
+    locations = cells_body(
+      columns = CogDrisk_p_fmt,
+      rows    = CogDrisk_stars %in% c("*", "**", "***")
+    )
+  ) %>%
+  tab_style(
+    style     = cell_fill(color = "#e8f4e8"),
+    locations = cells_body(
+      columns = LIBRA2_p_fmt,
+      rows    = LIBRA2_stars %in% c("*", "**", "***")
+    )
+  ) %>%
+  # Bold row group headers
+  tab_style(
+    style     = list(cell_text(weight = "bold"),
+                     cell_fill(color = "#f8f9fa")),
+    locations = cells_row_groups()
+  ) %>%
+  tab_footnote(
+    footnote  = md("*** p<0.001; ** p<0.01; * p<0.05. Clinical risk scores z-scored; \u03b2 reflects change per SD. Highlighted cells indicate p<0.05."),
+    locations = cells_column_spanners()
+  ) %>%
+  cols_align(align = "left", columns = term_label) %>%
+  tab_style(
+    style     = cell_text(align = "right", indent = px(12)),
+    locations = cells_body(columns = term_label)
+  ) %>%
+  cols_align(align = "center", columns = c(starts_with("CogDrisk_"), starts_with("LIBRA2_"))) %>%
+  row_group_order(groups = c(
+    "A\u03b242/40 ratio", "GFAP (log)", "NfL (log)",
+    "p-tau181 (log)", "p-tau217 (log)", "p-tau217/A\u03b242 ratio (log)"
+  ))
+
+table2_gt
+
+gtsave(table2_gt, filename = file.path(AIM1_OUTPUT_PATH$tables, "s_table_xsect_assoc.png"))
 ```
