@@ -23,15 +23,16 @@ predictors_dat <- crs_factors %>%
   select(CONP_ID, age=Age, sex=Sex, educ=Education_years) %>%
   left_join((grs_dat %>% select(CONP_ID, GRS)), by = "CONP_ID") %>%
   left_join((apoe_dat %>% select(CONP_ID, apoe)), by = "CONP_ID") %>%
-  left_join((fhx_dat %>% select(CONP_ID, family_history)), by = "CONP_ID") %>%
+  left_join((fhx_dat %>% select(CONP_ID, FDR_AD)), by = "CONP_ID") %>%
   left_join((cogd_scored %>% select(CONP_ID, score_cogd)), by = "CONP_ID") %>%
   left_join((libra_scored %>% select(CONP_ID, score_libra2)), by = "CONP_ID") %>%
-  select(CONP_ID, age, sex, educ, apoe, score_cogd, GRS, score_libra2, family_history) %>%
+  select(CONP_ID, age, sex, educ, apoe, score_cogd, GRS, score_libra2, FDR_AD) %>%
   # Risk burden components: 
   mutate(
     grs_quartile      = ntile(GRS, 4),
     grs_burden        = if_else(grs_quartile == 4, 1, 0),
-    fhx_burden        = if_else(family_history == "1 FDR", 0, 1),
+    fhx_burden        = if_else(FDR_AD > 1, 1, 0),
+    # fhx_burden        = if_else(family_history == "1 FDR", 0, 1),
     apoe_burden       = if_else(apoe == "e4+", 1, 0),
     
     # CRS cutoff strategy: 1 SD above mean (selected via aim1_crs_cutoffs analysis)
@@ -43,7 +44,8 @@ predictors_dat <- crs_factors %>%
                                          cogdrisk_burden, grs_burden)), na.rm = TRUE),
     risk_score_libra2 = rowSums(across(c(fhx_burden, apoe_burden,
                                          libra2_burden, grs_burden)), na.rm = TRUE)
-  )
+  ) %>%
+  select(CONP_ID, age, sex, educ, )
 
 # Save predictors dataframe
 saveRDS(predictors_dat, file.path(DATA_CLEANED_PATH, "PREVENTAD_predictors.rds"))
