@@ -16,10 +16,14 @@ crs_factors <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_crsfactors_i
 cogd_scored <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_cogd_scored.rds"))
 libra_scored <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_libra2_scored.rds"))
 
+# IDs of participants with >25% missing CRS variables
+missing_ids <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_missingcrs.rds"))
+
 
 # PREDICTORS DATAFRAME ------------------------------------------------------
-# Create predictors dataframe by combining all risk factor sources
+# Create predictors dataframe by combining all risk factor sources and filter out IDs
 predictors_dat <- crs_factors %>%
+  filter(!CONP_ID %in% missing_ids$CONP_ID) %>%
   select(CONP_ID, age=Age, sex=Sex, educ=Education_years) %>%
   left_join((grs_dat %>% select(CONP_ID, GRS)), by = "CONP_ID") %>%
   left_join((apoe_dat %>% select(CONP_ID, apoe)), by = "CONP_ID") %>%
@@ -44,8 +48,7 @@ predictors_dat <- crs_factors %>%
                                          cogdrisk_burden, grs_burden)), na.rm = TRUE),
     risk_score_libra2 = rowSums(across(c(fhx_burden, apoe_burden,
                                          libra2_burden, grs_burden)), na.rm = TRUE)
-  ) %>%
-  select(CONP_ID, age, sex, educ, )
+  ) 
 
 # Save predictors dataframe
 saveRDS(predictors_dat, file.path(DATA_CLEANED_PATH, "PREVENTAD_predictors.rds"))
@@ -144,8 +147,8 @@ saveRDS(all_dat, file.path(DATA_CLEANED_PATH, "PREVENTAD_longitudinal.rds"))
 
 # Print summary
 cat("\n=== Data Loading Complete ===\n")
-cat("Baseline:", nrow(biomarker_baseline_dat), "participants\n")
-cat("Last visit:", nrow(biomarker_last_nomci_dat), "participants\n")
+cat("Baseline:", nrow(baseline_dat), "participants\n")
+cat("Last visit:", nrow(lastvisit_dat), "participants\n")
 cat("Longitudinal data:", nrow(all_dat), "observations from",
     length(unique(all_dat$CONP_ID)), "participants\n")
 
