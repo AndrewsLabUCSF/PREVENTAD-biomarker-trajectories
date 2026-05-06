@@ -1,5 +1,5 @@
 ---
-title: "Aim 1: Multivariable Risk Burden Analysis"
+title: "Aim 1: Linear Regression Risk Burden Analysis"
 format:
   html:
     embed-resources: true
@@ -350,6 +350,7 @@ res_plot_combined
 #        res_plot_combined,
 #        width = 16, height = 10, dpi = 300)
 ```
+
 
 ```{r multivar-assoc-table}
 biomarker_order_mv <- c(

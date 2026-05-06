@@ -138,12 +138,16 @@ all_dat <- predictors_dat %>%
   select(-age.y) %>%
   rename(age = age.x)
 
+# Filter out participants that progressed to MCI
+all_nomci_dat <- all_dat %>% filter(!CONP_ID %in% mci_dat$CONP_ID)
+
 
 # SAVE FINAL DATAFRAMES ---------------------------------------------------
 saveRDS(baseline_dat, file.path(DATA_CLEANED_PATH, "PREVENTAD_baseline.rds"))
 saveRDS(lastvisit_dat, file.path(DATA_CLEANED_PATH, "PREVENTAD_lastvisit_all.rds"))
 saveRDS(lastvisit_nomci_dat, file.path(DATA_CLEANED_PATH, "PREVENTAD_lastvisit_nomci.rds"))
 saveRDS(all_dat, file.path(DATA_CLEANED_PATH, "PREVENTAD_longitudinal.rds"))
+saveRDS(all_nomci_dat, file.path(DATA_CLEANED_PATH, "PREVENTAD_longitudinal_nomci.rds"))
 
 # Print summary
 cat("\n=== Data Loading Complete ===\n")
