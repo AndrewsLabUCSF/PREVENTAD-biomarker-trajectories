@@ -42,18 +42,13 @@ outcome_labels <- c(
   ptau217_log            = "ptau-217",
   ptau217_ab42_ratio_log = "ptau-217/A\u03b242 ratio"
 )
-
-# subjects with 3+ ptau217 observations (with all covariates)
-ptau217_subjects <- all_dat %>%
-  filter(!is.na(ptau217), !is.na(risk_score_cogd), 
-         !is.na(risk_score_libra2), !is.na(baseline_age), 
-         !is.na(sex), !is.na(educ)) %>%
-  count(CONP_ID) %>%
-  filter(n >= 3) %>%
-  pull(CONP_ID)
 ```
 
+
+
 # Biomarker unconditional growth models
+
+
 
 ```{r growth-models}
 # Unconditional growth: compare linear, ns(df=2), ns(df=3)
@@ -78,12 +73,7 @@ fit_uncond <- function(o, e) {
 
 uncond_models <- expand_grid(outcome = BIOMARKERS_TRANS, uncond_specs) %>%
   mutate(
-    # Random slopes for outcomes with enough longitudinal data;
-    # random intercept only for sparse outcomes
-    re_term = if_else(outcome %in% sparse_outcomes,
-                      "(1 | CONP_ID)",
-                      "(1 + years | CONP_ID)"),
-    eq  = glue("{outcome} ~ {time_term} + {re_term}"),
+    eq  = glue("{outcome} ~ {time_term} + (1 | CONP_ID)"),
     res = map2(outcome, as.character(eq), fit_uncond),
     mod = map(res, ~if (is.null(.x)) tibble() else glance(.x))
   )
@@ -97,34 +87,7 @@ uncond_aic <- uncond_models %>%
   group_by(outcome) %>%
   mutate(delta_AIC = AIC - min(AIC),
          best      = AIC == min(AIC)) %>%
-  ungroup()
-
-# Sequential likelihood ratio tests:
-#   ns_df2 vs linear (does adding curvature help?)
-#   ns_df3 vs ns_df2 (does extra df help further?)
-uncond_lrt <- uncond_models %>%
-  filter(!map_lgl(res, is.null)) %>%
-  select(outcome, spec, res) %>%
-  pivot_wider(names_from = spec, values_from = res) %>%
-  rowwise() %>%
-  mutate(
-    p_vs_linear = if (!is.null(linear) && !is.null(ns_df2))
-      anova(linear, ns_df2)$"Pr(>Chisq)"[2] else NA_real_,
-    p_vs_df2    = if (!is.null(ns_df2) && !is.null(ns_df3))
-      anova(ns_df2, ns_df3)$"Pr(>Chisq)"[2] else NA_real_
-  ) %>%
   ungroup() %>%
-  transmute(
-    outcome,
-    linear = NA_real_,
-    ns_df2 = p_vs_linear,
-    ns_df3 = p_vs_df2
-  ) %>%
-  pivot_longer(c(linear, ns_df2, ns_df3),
-               names_to = "spec", values_to = "lrt_p_vs_simpler")
-
-uncond_aic <- uncond_aic %>%
-  left_join(uncond_lrt, by = c("outcome", "spec")) %>%
   arrange(outcome, AIC)
 
 print(uncond_aic)
@@ -187,11 +150,15 @@ print(p_uncond)
 # AIC of 2 vs 3 dfs
 ```
 
+
+
 # LME Models
 
 ## Model 1: Baseline
 
 These models test whether composite risk score (0-4 scale) predicts biomarker levels in a dose-response manner. The beta coefficient represents the change in biomarker level for each 1-unit increase in risk score (e.g., going from 2 to 3 risk factors). LIBRA2 models are adjusted for age, sex, and education.
+
+
 
 ```{r dose-main-models}
 models_dose_main <- tribble(
@@ -200,35 +167,41 @@ models_dose_main <- tribble(
   "LIBRA2_dose", "years_centered + baseline_age + sex + educ + risk_score_libra2 + (1 + years_centered | CONP_ID)"
 )
 
-models_dose_sparse <- tribble(
-  ~model, ~predictors,
-  "CogDrisk_dose", "years_centered + risk_score_cogd + (1 | CONP_ID)",
-  "LIBRA2_dose",   "years_centered + baseline_age + sex + educ + risk_score_libra2 + (1 | CONP_ID)"
-)
-
-lme_dose_main <- bind_rows(
-  # random slopes for all other outcomes
-  expand_grid(
-    outcome = setdiff(BIOMARKERS_TRANS, sparse_outcomes),
-    models_dose_main
-  ),
-  # intercept only for sparse ptau outcomes
-  expand_grid(
-    outcome = sparse_outcomes,
-    models_dose_sparse
+fit_lmer_with_fallback <- function(eq_rs, data) {
+  eq_ri <- str_replace(eq_rs, "\\(1 \\+ years_centered \\| CONP_ID\\)", "(1 | CONP_ID)")
+  tryCatch(
+    lmer(as.formula(eq_rs), data = data, REML = FALSE),
+    error = function(e) {
+      message("Random slopes failed for: ", eq_rs, "\n  Falling back to random intercept.\n  Reason: ", conditionMessage(e))
+      lmer(as.formula(eq_ri), data = data, REML = FALSE)
+    }
   )
+}
+
+fit_biomarker_lmer <- function(outcome_var, eq_str) {
+  dat_sub <- all_dat[!is.na(all_dat[[outcome_var]]), ]
+  fit_lmer_with_fallback(eq_str, data = dat_sub)
+}
+
+lme_dose_main <- expand_grid(
+  outcome = BIOMARKERS_TRANS,
+  models_dose_main
 ) %>%
   mutate(
-    eq    = glue("{outcome} ~ {predictors}"),
-    res   = map(eq, ~lmer(as.formula(.), data = all_dat)),
+    eq = glue("{outcome} ~ {predictors}"),
+    res = map2(outcome, as.character(eq), fit_biomarker_lmer),
     dataf = map(res, tidy),
-    mod   = map(res, glance)
+    mod = map(res, glance)
   )
 ```
+
+
 
 ## Model 2: Time interactions (risk score × time)
 
 These models test whether the rate of biomarker change over time differs by risk score level and other covariates. The interaction term (years_centered:risk_score) shows how much faster (or slower) biomarkers change for each additional risk factor. For LIBRA2, interactions between time and demographic covariates (baseline_age, sex, educ) are also included. 
+
+
 
 ```{r dose-interact-models}
 models_time_interact <- tribble(
@@ -237,43 +210,23 @@ models_time_interact <- tribble(
   "LIBRA2_interact", "years_centered * (risk_score_libra2 + baseline_age + sex + educ) + (1 + years_centered | CONP_ID)"
 )
 
-models_time_interact_sparse <- tribble(
-  ~model, ~predictors,
-  "CogDrisk_interact", "years_centered * risk_score_cogd + (1 | CONP_ID)",
-  "LIBRA2_interact",   "years_centered * (baseline_age + sex + educ + risk_score_libra2) + (1 | CONP_ID)"
-)
-
-lme_time_interact <- bind_rows(
-  # all other outcomes — full random slopes, full data
-  expand_grid(
-    outcome = setdiff(BIOMARKERS_TRANS, "ptau217_ab42_ratio_log"),
-    models_time_interact
-  ),
-  # ptau217 — full random slopes, filtered to 3+ visit subjects
-  expand_grid(
-    outcome = "ptau217_log",
-    models_time_interact
-  ),
-  # ptau217_ab42 — intercept only, full data
-  expand_grid(
-    outcome = "ptau217_ab42_ratio_log",
-    models_time_interact_sparse
-  )
+lme_time_interact <- expand_grid(
+  outcome = BIOMARKERS_TRANS,
+  models_time_interact
 ) %>%
   mutate(
-    dat = map(outcome, ~case_when(
-      . == "ptau217"      ~ list(filter(all_dat, CONP_ID %in% ptau217_subjects)),
-      . == "ptau217_ab42" ~ list(all_dat),
-      TRUE                ~ list(all_dat)
-    ) %>% pluck(1)),
-    eq    = glue("{outcome} ~ {predictors}"),
-    res   = map2(eq, dat, ~lmer(as.formula(.x), data = .y)),
-    dataf = map(res, ~tidy(., conf.int = TRUE)),
-    mod   = map(res, glance)
+    eq = glue("{outcome} ~ {predictors}"),
+    res = map2(outcome, as.character(eq), fit_biomarker_lmer),
+    dataf = map(res, tidy),
+    mod = map(res, glance)
   )
 ```
 
+
+
 ## Extract and format results
+
+
 
 ```{r format-results}
 # Combine all LME results
@@ -329,9 +282,13 @@ lme_results <- bind_rows(
                 ~round(., digits = 3)))
 ```
 
+
+
 # Results 
 
 ## CogDrisk: Main effects
+
+
 
 ```{r table-dose-main-cogdrisk}
 dose_main_cogdrisk <- lme_results %>%
@@ -386,7 +343,11 @@ dose_main_cogdrisk %>%
   )
 ```
 
+
+
 ## LIBRA2: Main effects
+
+
 
 ```{r table-dose-main-libra2}
 dose_main_libra2 <- lme_results %>%
@@ -441,7 +402,11 @@ dose_main_libra2 %>%
   )
 ```
 
+
+
 ## CogDrisk: Time interaction
+
+
 
 ```{r table-time-interact-cogdrisk}
 time_interact_cogdrisk <- lme_results %>%
@@ -490,7 +455,11 @@ time_interact_cogdrisk %>%
   )
 ```
 
+
+
 ## LIBRA2: Time interaction
+
+
 
 ```{r table-time-interact-libra2}
 time_interact_libra2 <- lme_results %>%
@@ -539,9 +508,13 @@ time_interact_libra2 %>%
   )
 ```
 
+
+
 # Dose-response plots
 
 ## Main effect
+
+
 
 ```{r plot-main}
 #| fig-width: 10
@@ -585,10 +558,10 @@ p_main_combined <- ggplot(plot_data_main,
     name = "Model"
   ) +
   labs(
-    x     = "Beta (95% CI)",
+    x     = "Change in Biomarker per Unit Increase in Risk Score (95% CI)",
     y     = NULL,
-    title = "Figure 3. Baseline Association with Risk Score"#,
-    #subtitle = "Change in biomarker level per unit increase in composite risk score (LME)"
+    title = "Figure 3. Longitudinal Risk Burden: Main Effects",
+    subtitle = "Change in biomarker level per unit increase in composite risk score (LME)"
   ) +
   theme_bw(base_size = 13) +
   theme(
@@ -603,12 +576,16 @@ p_main_combined <- ggplot(plot_data_main,
 
 print(p_main_combined)
 
-ggsave(file.path(AIM1_OUTPUT_PATH$figures, "fig3_lme_main_effects.png"),
-       p_main_combined, width = 10, height = 6, dpi = 300)
+# ggsave(file.path(AIM1_OUTPUT_PATH$figures, "fig3_lme_main_effects.png"),
+#        p_main_combined, width = 10, height = 6, dpi = 300)
 ```
 
 
+
+
 ## Time interaction
+
+
 
 ```{r plot-time-interact}
 #| fig-width: 10
@@ -671,6 +648,8 @@ p_interact_combined <- ggplot(plot_data_interact,
 print(p_interact_combined)
 ```
 
+
+
 # Trajectory plots
 
 **Methodology: Generating Predicted Trajectories**
@@ -708,6 +687,8 @@ The predicted biomarker trajectories are generated from the LME models fitted ab
 - Trajectories for other demographic profiles would differ due to covariate × time interactions
 
 ## Predicted trajectories: CogDrisk
+
+
 
 ```{r trajectories-cogdrisk}
 #| fig-width: 14
@@ -851,9 +832,9 @@ p_cogd_traj <- ggplot() +
   labs(
     x = "Years from Baseline",
     y = "Biomarker Level",
-    title = "Figure 3. Predicted Blood-based Biomarker Trajectories by Number of Risk Indicators",
+    title = "Figure 4. Predicted Blood-based Biomarker Trajectories by Number of Risk Indicators",
     subtitle = "CogDrisk-based composite risk burden model",
-    #caption = caption_text
+    caption = caption_text
   ) +
   theme_bw(base_size = 12) +
   theme(
@@ -862,15 +843,17 @@ p_cogd_traj <- ggplot() +
     strip.background = element_rect(fill = "grey90"),
     plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
     plot.subtitle = element_text(size = 12, hjust = 0.5),
-    # plot.caption = element_text(size = 9, hjust = 0, lineheight = 1.2,
-    #                             margin = margin(t = 10))
+    plot.caption = element_text(size = 9, hjust = 0, lineheight = 1.2,
+                                margin = margin(t = 10))
   )
 
 print(p_cogd_traj)
 
-ggsave(file.path(AIM1_OUTPUT_PATH$figures, "fig3_longitudinal_CogDrisk_trajectories.png"),
+ggsave(file.path(AIM1_OUTPUT_PATH$figures, "fig4_longitudinal_CogDrisk_trajectories.png"),
        p_cogd_traj, width = 14, height = 10, dpi = 250)
 ```
+
+
 
 **CogDrisk Results Summary:**
 
@@ -881,6 +864,8 @@ Key observations:
 
 
 ## Predicted trajectories: LIBRA2
+
+
 
 ```{r trajectories-libra2}
 #| fig-width: 14
@@ -967,9 +952,9 @@ p_libra_traj <- ggplot() +
   labs(
     x = "Years from Baseline",
     y = "Biomarker Level",
-    title = "Figure 4. Predicted Blood-based Biomarker Trajectories by Number of Risk Indicators",
+    title = "Figure 5. Predicted Blood-based Biomarker Trajectories by Number of Risk Indicators",
     subtitle = "LIBRA2-based composite risk burden model",
-    # caption = caption_text_libra2
+    caption = caption_text_libra2
   ) +
   theme_bw(base_size = 12) +
   theme(
@@ -977,18 +962,22 @@ p_libra_traj <- ggplot() +
     strip.text = element_text(face = "bold"),
     strip.background = element_rect(fill = "grey90"),
     plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
-    plot.subtitle = element_text(size = 12, hjust = 0.5)#,
-    # plot.caption = element_text(size = 9, hjust = 0, lineheight = 1.2,
-    #                             margin = margin(t = 10))
+    plot.subtitle = element_text(size = 12, hjust = 0.5),
+    plot.caption = element_text(size = 9, hjust = 0, lineheight = 1.2,
+                                margin = margin(t = 10))
   )
 
 print(p_libra_traj)
 
-ggsave(file.path(AIM1_OUTPUT_PATH$figures, "fig4_longitudinal_LIBRA2_trajectories.png"),
+ggsave(file.path(AIM1_OUTPUT_PATH$figures, "fig5_longitudinal_LIBRA2_trajectories.png"),
        p_libra_traj, width = 14, height = 10, dpi = 250)
 ```
 
+
+
 ## Focused Plot: CogDrisk ptau Trajectories
+
+
 
 ```{r ptau-cogdrisk-focused-plot}
 #| fig-width: 12
@@ -1063,7 +1052,11 @@ ggsave(file.path(AIM1_OUTPUT_PATH$figures, "PREVENTAD_ptau181_trajectories.png")
        p_ptau181, width = 12, height = 9, dpi = 300)
 ```
 
+
+
 ## Focused Plot: LIBRA2 ptau217 Trajectories 
+
+
 
 ```{r ptau-combined-focused-plot}
 ptau217_obs <- risk_dat_long_plot %>%
@@ -1124,6 +1117,8 @@ ggsave(file.path(AIM1_OUTPUT_PATH$figures, "longitudinal_ptau217_LIBRA2_trajecto
        p217_libra2, width = 4, height = 3.3, units = "in",dpi = 300)
 ```
 
+
+
 ## Summary
 
 1. Higher-risk individuals should show elevated biomarker levels at baseline (vertical separation of lines)
@@ -1131,6 +1126,8 @@ ggsave(file.path(AIM1_OUTPUT_PATH$figures, "longitudinal_ptau217_LIBRA2_trajecto
 
 
 # Save results
+
+
 
 ```{r save-results}
 # Save main results table
@@ -1171,3 +1168,4 @@ cat("\nResults saved to:", AIM1_OUTPUT_PATH$tables, "\n")
 cat("Figures saved to:", AIM1_OUTPUT_PATH$figures, "\n")
 cat("Models saved to:", DATA_INTERMEDIATE_PATH, "\n")
 ```
+

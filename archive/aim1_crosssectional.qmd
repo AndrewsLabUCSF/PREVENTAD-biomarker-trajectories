@@ -45,26 +45,153 @@ lastvisit_nomci_dat_long <- lastvisit_nomci_dat %>%
   ) 
 ```
 
-## Risk burden distribution
+## Risk burden 
 
-```{r risk-burden-distribution}
-#| fig-width: 12
-#| fig-height: 5
+```{r risk-burden-assoc-tau}
+#| fig-width: 14
+#| fig-height: 8
+#| out-width: "100%"
 
-p1 <- ggplot(risk_dat_long, aes(x = factor(risk_score_cogd))) +
-  geom_bar(fill = "steelblue", alpha = 0.7) +
-  labs(title = "CogDrisk Composite Risk Score Distribution",
-       x = "Risk Score (0-4)", y = "Count") +
-  theme_minimal()
+# Outcome label lookup
+outcome_labels_cs <- c(
+  ab_ratio               = "A\u03b242/40",
+  gfap_log               = "GFAP",
+  nfl_log                = "NfL",
+  ptau181_log            = "ptau-181",
+  ptau217_log            = "ptau-217",
+  ptau217_ab42_ratio_log = "ptau-217/A\u03b242 ratio"
+)
 
-p2 <- ggplot(risk_dat_long, aes(x = factor(risk_score_libra2))) +
-  geom_bar(fill = "coral", alpha = 0.7) +
-  labs(title = "LIBRA2 Composite Risk Score Distribution",
-       x = "Risk Score (0-4)", y = "Count") +
-  theme_minimal()
+# Fit simple dose-response model per biomarker: biomarker ~ risk_score_cogd
+dose_models_cs <- expand_grid(
+  outcome    = BIOMARKERS_TRANS,
+  predictors = "risk_score_cogd"
+) %>%
+  mutate(
+    fit    = map(outcome, ~lm(as.formula(paste0(.x, " ~ risk_score_cogd")),
+                              data = risk_dat)),
+    tidy_f = map(fit, tidy)
+  )
 
-p1 + p2
+# Predicted values at each discrete level 0–4 with 95% CI
+pred_grid_ord <- tibble(risk_score_cogd = 0:4)
+
+cs_predictions <- dose_models_cs %>%
+  mutate(
+    preds = map(fit, ~{
+      as_tibble(predict(.x, newdata = pred_grid_ord, interval = "confidence")) %>%
+        bind_cols(pred_grid_ord)
+    }),
+    outcome_label = factor(outcome_labels_cs[outcome], levels = outcome_labels_cs)
+  ) %>%
+  select(outcome, outcome_label, preds) %>%
+  unnest(preds)
+
+# Colored segments connecting adjacent predicted levels (0→1, 1→2, 2→3, 3→4)
+cs_segments <- cs_predictions %>%
+  group_by(outcome, outcome_label) %>%
+  arrange(risk_score_cogd) %>%
+  mutate(xend = lead(risk_score_cogd), yend = lead(fit)) %>%
+  filter(!is.na(xend)) %>%
+  ungroup()
+
+# Per-panel annotation: β, 95% CI, p-value for risk_score_cogd term
+cs_annot <- dose_models_cs %>%
+  mutate(outcome_label = factor(outcome_labels_cs[outcome], levels = outcome_labels_cs)) %>%
+  select(outcome, outcome_label, tidy_f) %>%
+  unnest(tidy_f) %>%
+  filter(term == "risk_score_cogd") %>%
+  mutate(
+    conf.low  = estimate - 1.96 * std.error,
+    conf.high = estimate + 1.96 * std.error,
+    across(c(estimate, conf.low, conf.high, p.value), ~round(., 3)),
+    stars = case_when(
+      p.value >= 0.05  ~ "",
+      p.value >= 0.01  ~ "*",
+      p.value >= 0.001 ~ "**",
+      TRUE             ~ "***"
+    ),
+    p_fmt = if_else(p.value < 0.001, "< 0.001", as.character(p.value)),
+    annot = paste0("\u03b2 = ", estimate,
+                   " [", conf.low, ", ", conf.high, "]",
+                   ", p = ", p_fmt, stars)
+  )
+
+# Observed data in long format (jittered points)
+obs_ord <- risk_dat %>%
+  select(risk_score_cogd, all_of(BIOMARKERS_TRANS)) %>%
+  pivot_longer(cols      = all_of(BIOMARKERS_TRANS),
+               names_to  = "outcome",
+               values_to = "observed") %>%
+  filter(!is.na(observed), !is.na(risk_score_cogd)) %>%
+  mutate(outcome_label = factor(outcome_labels_cs[outcome], levels = outcome_labels_cs))
+
+# Plot
+cogd_assoc_plot <- ggplot() +
+  geom_jitter(
+    data  = obs_ord,
+    aes(x = risk_score_cogd, y = observed, color = factor(risk_score_cogd)),
+    alpha = 0.2, size = 0.8, width = 0.15
+  ) +
+  geom_ribbon(
+    data  = cs_predictions,
+    aes(x = risk_score_cogd, ymin = lwr, ymax = upr),
+    fill  = "grey60", alpha = 0.3
+  ) +
+  # Colored segments between adjacent predicted levels
+  geom_segment(
+    data = cs_segments,
+    aes(x = risk_score_cogd, y = fit, xend = xend, yend = yend,
+        color = factor(risk_score_cogd)),
+    linewidth = 1
+  ) +
+  geom_point(
+    data  = cs_predictions,
+    aes(x = risk_score_cogd, y = fit, color = factor(risk_score_cogd)),
+    size  = 3
+  ) +
+  geom_label(
+    data        = cs_annot,
+    aes(x = -Inf, y = Inf, label = annot),
+    inherit.aes = FALSE,
+    hjust = -0.05, vjust = 1.4,
+    size = 3, color = "grey20",
+    label.padding = unit(0.25, "lines")
+  ) +
+  scale_color_viridis_d(option = "plasma", begin = 0.2, end = 0.9,
+                        name = "# Risk Indicators") +
+  scale_x_continuous(breaks = 0:4, limits = c(-0.3, 4.3)) +
+  scale_y_continuous(expand = expansion(mult = c(0.02, 0.05))) +
+  facet_wrap(~outcome_label, scales = "free_y", ncol = 3) +
+  labs(
+    x       = "Composite Risk Score (# Risk Indicators, 0\u20134)",
+    y       = "Biomarker Level",
+    title   = "Predicted Biomarker Levels by Composite Risk Score",
+    caption = paste0(
+      "Cohort: PREVENT-AD. N = ", nrow(risk_dat), "\n",
+      "Risk indicators: APOE \u03b54+; Family history (\u22652 first-degree relatives); Genetic risk score (top quartile); ",
+      "CogDrisk > 1 SD above mean. Composite score: 0\u20134 scale.\n",
+      "Points = observed values (jittered). Colored segments = predicted mean at each level ",
+      "(lm: biomarker ~ risk score). Shaded band = 95% CI."
+    )
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    strip.text       = element_text(face = "bold"),
+    strip.background = element_rect(fill = "grey90"),
+    plot.title       = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.caption     = element_text(size = 9, hjust = 0, lineheight = 1.2,
+                                    margin = margin(t = 10)),
+    legend.position  = "bottom"
+  )
+
+cogd_assoc_plot
+ggsave(file.path(AIM1_OUTPUT_PATH$figures, "PREVENTAD_CogDrisk_ordinal_assoc.png"),
+       cogd_assoc_plot, width = 14, height = 8, dpi = 300)
 ```
+
+Only 2 individuals have a CogDrisk-based composite risk score of 4, so collapse 
+into a 3+ category for plotting.
 
 ## Burden associations with biomarker levels
 
@@ -85,7 +212,14 @@ risk_scores_longer <- lastvisit_all_dat_long %>%
       str_detect(risk_score_type, "libra2") ~ "LIBRA2"
     ),
     
-    risk_score_factor = factor(risk_score_value)
+    # Collapse CogDrisk 4 individuals into 3+ category
+    risk_score_label = case_when(
+      model_type == "CogDrisk" & risk_score_value == 3 ~ "3+",
+      model_type == "CogDrisk" & risk_score_value == 4 ~ "3+",
+      TRUE ~ as.character(risk_score_value)
+    ),
+    
+    risk_score_factor = factor(risk_score_label)
   )
 
 # CogDrisk only
@@ -103,7 +237,7 @@ cogdrisk_plot <- risk_scores_longer %>%
   scale_fill_viridis_d(option = "plasma", begin = 0.2, end = 0.9) +
   labs(x = "Composite Risk Score",
        y = "Biomarker Level",
-       title = "Figure 1. Blood-based Biomarker Levels by Composite Risk Score") +
+       title = "Blood-based Biomarker Levels by Composite Risk Score") +
   #theme_bw(base_size = 12) +
   theme_bw() +
   theme(plot.title    = element_text(face = "bold", size = 15, hjust = 0.5),
@@ -136,8 +270,8 @@ libra2_plot <- risk_scores_longer %>%
         strip.text       = element_text(face = "bold"))
 libra2_plot
 
-ggsave(file.path(AIM1_OUTPUT_PATH$figures, "fig1_risk_burden_assoc_plot.png"), 
-       cogdrisk_plot, width = 12, height = 6, dpi = 300)
+# ggsave(file.path(AIM1_OUTPUT_PATH$figures, "fig1_risk_burden_assoc_plot.png"), 
+#        cogdrisk_plot, width = 12, height = 6, dpi = 300)
 ```
 
 ### Sensitivity: excluding MCI
@@ -159,7 +293,14 @@ risk_scores_longer <- lastvisit_nomci_dat_long %>%
       str_detect(risk_score_type, "libra2") ~ "LIBRA2"
     ),
     
-    risk_score_factor = factor(risk_score_value)
+    # Collapse CogDrisk 4 individuals into 3+ category
+    risk_score_label = case_when(
+      model_type == "CogDrisk" & risk_score_value == 3 ~ "3+",
+      model_type == "CogDrisk" & risk_score_value == 4 ~ "3+",
+      TRUE ~ as.character(risk_score_value)
+    ),
+    
+    risk_score_factor = factor(risk_score_label)
   )
 
 # CogDrisk only
@@ -296,9 +437,11 @@ res_risk_preventad <- bind_rows(select(risk_preventad, model, outcome, dataf)) %
                 ~round(., digits = 3)))
 ```
 
-## Regression results - Plot
+## Regression results 
 
-```{r regression-results-plot}
+### Multivariable associations
+
+```{r multivar-assoc-plot}
 #| fig-width: 14
 #| fig-height: 9
 #| out-width: "100%"
@@ -378,13 +521,14 @@ res_plot_combined <- ggplot(
   ) +
   scale_color_manual(
     values = c("CogDrisk" = "#374E55FF", "LIBRA2" = "#DF8F44FF"),
+    breaks = c("CogDrisk", "LIBRA2"),
     name = "Model"
   ) +
   facet_wrap(~outcome_label, scales = "free_x", ncol = 3) +
   labs(
     x       = "Beta (95% CI)",
     y       = "Predictor",
-    title   = "Figure 2. Composite Risk Burden Components Coefficient Plots",
+    title   = "Figure 1. Composite Risk Burden Components Coefficient Plots",
     caption = caption_text
   ) +
   theme_bw() +
@@ -404,11 +548,16 @@ res_plot_combined <- ggplot(
 
 res_plot_combined
 
-ggsave(file.path(AIM1_OUTPUT_PATH$figures, "fig2_risk_lm_res.png"),
+ggsave(file.path(AIM1_OUTPUT_PATH$figures, "fig1_risk_lm_res.png"),
        res_plot_combined,
        width = 16, height = 10, dpi = 300)
 ```
 
+### Cross-sectional associations
+
+```{r xsect-assoc}
+
+```
 
 ## Save results
 

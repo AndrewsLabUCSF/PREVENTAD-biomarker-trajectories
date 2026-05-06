@@ -16,7 +16,7 @@ source('workflow/scripts/config.R')
 predictors    <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_predictors.rds"))
 biomarkers    <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_longitudinal.rds"))
 PREVENTAD_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_raw.rds"))
-baseline_dat      <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_baseline.rds"))
+baseline_dat <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_baseline.rds"))
 mci_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_MCI.rds"))
 ```
 
@@ -24,6 +24,12 @@ mci_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_MCI.rds"))
 
 ```{r table-1}
 mci_ids <- mci_dat %>% distinct(CONP_ID) %>% pull(CONP_ID)
+
+dementia_ids <- PREVENTAD_dat$diagnosis %>%
+  filter(Clinical_diagnosis == "Dementia",
+         CONP_ID %in% baseline_dat$CONP_ID) %>%
+  distinct(CONP_ID) %>%
+  pull(CONP_ID)
 
 table1_data <- baseline_dat %>%
   left_join(
@@ -36,15 +42,19 @@ table1_data <- baseline_dat %>%
     female    = if_else(sex == "Female", 1, 0),
     caucasian = if_else(Ethnicity == "Caucasian", 1, 0),
     mci_status = factor(
-      if_else(CONP_ID %in% mci_ids, "Progressed to MCI", "Remained CU"),
-      levels = c("Remained CU", "Progressed to MCI")
+      case_when(
+        CONP_ID %in% dementia_ids ~ "Progressed to Dementia",
+        CONP_ID %in% mci_ids      ~ "Progressed to MCI",
+        TRUE                       ~ "Remained CU"
+      ),
+      levels = c("Remained CU", "Progressed to MCI", "Progressed to Dementia")
     )
   ) %>%
   select(
     # Demographics
     age, female, educ, caucasian,
     # AD risk factors
-    apoe, family_history, GRS, score_cogd, score_libra2,
+    apoe, FDR_AD, GRS, score_cogd, score_libra2,
     # Baseline biomarkers
     ab_ratio, gfap, nfl, ptau181, ptau217, ptau217_ab42_ratio,
     # Grouping variable
@@ -64,7 +74,7 @@ table1_gtsummary <- table1_data %>%
       educ                 = "Years of education",
       caucasian            = "Caucasian",
       apoe                 = "APOE genotype",
-      family_history       = "Family history of AD",
+      FDR_AD               = "FDRs with AD",
       GRS                  = "Genetic risk score",
       score_cogd           = "CogDrisk score",
       score_libra2         = "LIBRA2 score",
@@ -84,7 +94,7 @@ table1_gtsummary <- table1_data %>%
   add_overall(last = FALSE) %>%
   add_p(
     test = list(
-      all_continuous()  ~ "wilcox.test",
+      all_continuous()  ~ "kruskal.test",
       all_categorical() ~ "chisq.test"
     )
   ) %>%
@@ -94,7 +104,7 @@ table1_gtsummary <- table1_data %>%
       mutate(
         grouping = case_when(
           variable %in% c("age", "female", "educ", "caucasian")                            ~ "Demographics",
-          variable %in% c("apoe", "family_history", "GRS", "score_cogd", "score_libra2")  ~ "AD Risk Factors",
+          variable %in% c("apoe", "FDR_AD", "GRS", "score_cogd", "score_libra2")  ~ "AD Risk Factors",
           variable %in% c("ab_ratio", "gfap", "nfl", "ptau181",
                           "ptau217", "ptau217_ab42_ratio")                                 ~ "Baseline Biomarkers",
           TRUE ~ NA_character_
@@ -109,7 +119,7 @@ table1_gt <- table1_gtsummary %>%
   as_gt() %>%
   tab_header(
     title    = md("**Table 1.** Baseline Characteristics of PREVENT-AD Sample"),
-    subtitle = md("Stratified by MCI Progression Status (N = 285)")
+    subtitle = md("Stratified by Cognitive Progression Status")
   ) %>%
   tab_row_group(
     label = md("**Baseline Biomarkers**"),
@@ -133,7 +143,7 @@ table1_gt <- table1_gtsummary %>%
 
 table1_gt
 
-gtsave(table1_gt, filename = file.path(EDA_OUTPUT_PATH$tables, "table1_baseline_characteristics.png"))
+gtsave(table1_gt, filename = file.path(EDA_OUTPUT_PATH$tables, "table1_baseline_characteristics.docx"))
 ```
 
 # Table 2: Cross-Sectional Associations between Composite Risk Burden and Plasma Biomarkers
@@ -261,5 +271,114 @@ table2_gt <- table2_wide %>%
 
 table2_gt
 
-gtsave(table2_gt, filename = file.path(AIM1_OUTPUT_PATH$tables, "s_table_xsect_assoc.png"))
+gtsave(table2_gt, filename = file.path(AIM1_OUTPUT_PATH$tables, "s_table_xsect_assoc.docx"))
+```
+
+# Table 3: Longitudinal Associations between Composite Risk Burden and Plasma Biomarker Trajectories (Main Effect)
+
+```{r table-3}
+table3_long <- read_csv(
+  here("results/Aim1/tables/longitudinal_doseresponse_results.csv"),
+  show_col_types = FALSE
+) %>%
+  filter(model_type == "Main Effect") %>%
+  mutate(
+    biomarker = case_when(
+      outcome == "ab_ratio"               ~ "A\u03b242/40 ratio",
+      outcome == "gfap_log"               ~ "GFAP (log)",
+      outcome == "nfl_log"                ~ "NfL (log)",
+      outcome == "ptau181_log"            ~ "p-tau181 (log)",
+      outcome == "ptau217_log"            ~ "p-tau217 (log)",
+      outcome == "ptau217_ab42_ratio_log" ~ "p-tau217/A\u03b242 ratio (log)"
+    ),
+    beta_se  = sprintf("%.3f (%.3f)", estimate, std.error),
+    ci       = sprintf("[%.3f, %.3f]", conf.low, conf.high),
+    p_fmt    = if_else(p.value < 0.001, "<0.001", sprintf("%.3f", p.value)),
+    stars    = case_when(
+      p.value < 0.001 ~ "***",
+      p.value < 0.01  ~ "**",
+      p.value < 0.05  ~ "*",
+      TRUE            ~ ""
+    ),
+    pct_change = if_else(
+      !is.na(pct_change_per_unit),
+      sprintf("%+.1f%%", pct_change_per_unit),
+      "\u2014"
+    )
+  )
+
+table3_wide <- table3_long %>%
+  select(risk_type, biomarker, outcome, beta_se, ci, p_fmt, stars, pct_change) %>%
+  pivot_wider(
+    names_from  = risk_type,
+    values_from = c(beta_se, ci, p_fmt, stars, pct_change),
+    names_glue  = "{risk_type}_{.value}"
+  ) %>%
+  mutate(
+    biomarker = factor(biomarker, levels = c(
+      "A\u03b242/40 ratio", "GFAP (log)", "NfL (log)",
+      "p-tau181 (log)", "p-tau217 (log)", "p-tau217/A\u03b242 ratio (log)"
+    ))
+  ) %>%
+  arrange(biomarker) %>%
+  select(biomarker,
+         CogDrisk_beta_se, CogDrisk_ci, CogDrisk_p_fmt, CogDrisk_stars, CogDrisk_pct_change,
+         LIBRA2_beta_se,   LIBRA2_ci,   LIBRA2_p_fmt,   LIBRA2_stars,   LIBRA2_pct_change)
+
+table3_gt <- table3_wide %>%
+  gt() %>%
+  tab_header(
+    title    = md("**Table 3.** Longitudinal Associations between Composite Risk Burden and Plasma Biomarker Trajectories"),
+    subtitle = md("Linear mixed-effects models (main effect); \u03b2 reflects change per 1-unit increase in composite risk score")
+  ) %>%
+  tab_spanner(
+    label   = md("**CogDrisk**"),
+    columns = starts_with("CogDrisk_")
+  ) %>%
+  tab_spanner(
+    label   = md("**LIBRA2**"),
+    columns = starts_with("LIBRA2_")
+  ) %>%
+  cols_label(
+    biomarker              = md("**Biomarker**"),
+    CogDrisk_beta_se       = md("**\u03b2 (SE)**"),
+    CogDrisk_ci            = md("**95% CI**"),
+    CogDrisk_p_fmt         = md("**p**"),
+    CogDrisk_stars         = md(""),
+    CogDrisk_pct_change    = md("**% change**"),
+    LIBRA2_beta_se         = md("**\u03b2 (SE)**"),
+    LIBRA2_ci              = md("**95% CI**"),
+    LIBRA2_p_fmt           = md("**p**"),
+    LIBRA2_stars           = md(""),
+    LIBRA2_pct_change      = md("**% change**")
+  ) %>%
+  tab_style(
+    style     = cell_fill(color = "#e8f4e8"),
+    locations = cells_body(
+      columns = CogDrisk_p_fmt,
+      rows    = CogDrisk_stars %in% c("*", "**", "***")
+    )
+  ) %>%
+  tab_style(
+    style     = cell_fill(color = "#e8f4e8"),
+    locations = cells_body(
+      columns = LIBRA2_p_fmt,
+      rows    = LIBRA2_stars %in% c("*", "**", "***")
+    )
+  ) %>%
+  tab_style(
+    style     = list(cell_text(weight = "bold"),
+                     cell_fill(color = "#f8f9fa")),
+    locations = cells_row_groups()
+  ) %>%
+  tab_footnote(
+    footnote  = md("*** p<0.001; ** p<0.01; * p<0.05. Models adjusted for time (years centered at baseline); random intercept per participant. % change = (exp(\u03b2) \u2212 1) \u00d7 100; applicable to log-transformed outcomes only (\u2014 for A\u03b242/40 ratio). Highlighted cells indicate p<0.05."),
+    locations = cells_column_spanners()
+  ) %>%
+  cols_align(align = "left",   columns = biomarker) %>%
+  cols_align(align = "center", columns = c(starts_with("CogDrisk_"), starts_with("LIBRA2_")))
+
+table3_gt
+
+gtsave(table3_gt, filename = file.path(AIM1_OUTPUT_PATH$tables, "s_table_long_main.docx"))
 ```
