@@ -1,0 +1,808 @@
+---
+title: "Aim 1: Multivariable Risk Burden Analysis"
+format:
+  html:
+    embed-resources: true
+    self-contained: true
+    toc: true
+    toc-depth: 3
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warnings = FALSE)
+knitr::opts_knit$set(root.dir = here::here())
+```
+
+```{r setting}
+library(broom)
+library(car)
+library(patchwork)
+library(openxlsx)
+library(huxtable)
+
+source('workflow/scripts/config.R')
+```
+
+```{r load-data}
+# Load data pre-built by 00_load_analysis_data.R
+lastvisit_all_dat <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_lastvisit_all.rds"))
+
+lastvisit_all_dat_long <- lastvisit_all_dat %>%
+  pivot_longer(
+    cols = all_of(BIOMARKERS_TRANS),
+    names_to = "biomarker",
+    values_to = "measure"
+  ) 
+
+```
+
+## Risk burden distribution
+
+```{r risk-burden-distribution}
+#| fig-width: 12
+#| fig-height: 5
+
+p1 <- ggplot(lastvisit_all_dat, aes(x = factor(risk_score_cogd))) +
+  geom_bar(fill = "steelblue", alpha = 0.7) +
+  geom_text(
+    stat = "count",  
+    aes(label = after_stat(count)),  
+    vjust = -0.3,  
+    hjust = 0.5,   
+    size = 3.5     
+  ) +
+  labs(title = "CogDrisk Composite Risk Score Distribution",
+       x = "Risk Score (0-4)", y = "Count") +
+  theme_minimal()
+
+p2 <- ggplot(lastvisit_all_dat, aes(x = factor(risk_score_libra2))) +
+  geom_bar(fill = "coral", alpha = 0.7) +
+  geom_text(
+    stat = "count",  
+    aes(label = after_stat(count)),  
+    vjust = -0.3,  
+    hjust = 0.5,   
+    size = 3.5     
+  ) +
+  labs(title = "LIBRA2 Composite Risk Score Distribution",
+       x = "Risk Score (0-4)", y = "Count") +
+  theme_minimal()
+
+p1 + p2
+```
+
+Only 2 individuals have a CogDrisk-based composite risk score of 4, so collapse into a 3+ category for plotting.
+
+## Burden associations with biomarker levels
+
+```{r risk-burden-assoc, warning=FALSE}
+#| fig-width: 12
+#| fig-height: 6
+#| out-width: "100%"
+risk_scores_longer <- lastvisit_all_dat_long %>%
+  select(risk_score_cogd, risk_score_libra2,
+         biomarker, measure) %>%
+  pivot_longer(cols = c(risk_score_cogd, risk_score_libra2),
+               names_to = "risk_score_type",
+               values_to = "risk_score_value") %>%
+  mutate(
+    # Extract model type (CogDrisk or LIBRA2)
+    model_type = case_when(
+      str_detect(risk_score_type, "cogd") ~ "CogDrisk",
+      str_detect(risk_score_type, "libra2") ~ "LIBRA2"
+    ),
+    
+    # Collapse CogDrisk 4 individuals into 3+ category
+    risk_score_label = case_when(
+      model_type == "CogDrisk" & risk_score_value == 3 ~ "3+",
+      model_type == "CogDrisk" & risk_score_value == 4 ~ "3+",
+      TRUE ~ as.character(risk_score_value)
+    ),
+    
+    risk_score_factor = factor(risk_score_label)
+  )
+
+# CogDrisk only
+cogdrisk_plot <- risk_scores_longer %>%
+  filter(model_type == "CogDrisk") %>%
+  ggplot(aes(x = risk_score_factor, y = measure, fill = risk_score_factor)) +
+  geom_violin(alpha = 0.7) +
+  geom_boxplot(width = 0.1, fill = "white") +
+  facet_wrap(~biomarker, scales = "free") +
+  stat_compare_means(method = "kruskal.test",
+                     label.x.npc = 0.05,
+                     label.y.npc = 0.8,
+                     geom = "label",
+                     size = 4) +
+  scale_fill_viridis_d(option = "plasma", begin = 0.2, end = 0.9) +
+  labs(x = "Composite Risk Score",
+       y = "Biomarker Level",
+       title = "Blood-based Biomarker Levels by CogDrisk Composite Risk Score") +
+  #theme_bw(base_size = 12) +
+  theme_bw() +
+  theme(plot.title    = element_text(face = "bold", size = 15, hjust = 0.5),
+        axis.title = element_text(size = 10),
+        legend.position = "none",
+        strip.background = element_rect(fill = "grey90"),
+        strip.text       = element_text(face = "bold"))
+cogdrisk_plot
+
+# LIBRA2 only
+libra2_plot <- risk_scores_longer %>%
+  filter(model_type == "LIBRA2") %>%
+  ggplot(aes(x = risk_score_factor, y = measure, fill = risk_score_factor)) +
+  geom_violin(alpha = 0.7) +
+  geom_boxplot(width = 0.1, fill = "white") +
+  facet_wrap(~biomarker, scales = "free") +
+  stat_compare_means(method = "kruskal.test",
+                     label.y.npc = 0.8,
+                     geom = "label",
+                     size = 4) +
+  scale_fill_viridis_d(option = "plasma", begin = 0.2, end = 0.9) +
+  labs(x = "LIBRA2 Composite Risk Score",
+       y = "Biomarker Level",
+       title = "Biomarker Levels by LIBRA2 Composite Risk Score") +
+  theme_bw() +
+  theme(plot.title    = element_text(face = "bold", size = 15, hjust = 0.5),
+        axis.title = element_text(size = 10),
+        legend.position = "none",
+        strip.background = element_rect(fill = "grey90"),
+        strip.text       = element_text(face = "bold"))
+libra2_plot
+```
+
+## Linear regression model fitting
+
+```{r regression}
+risk_dat <- lastvisit_all_dat %>%
+  # Z-scored CRS for interpretable per-SD coefficient plots
+  mutate(score_cogd_z = as.numeric(scale(score_cogd)),
+         score_libra2_z = as.numeric(scale(score_libra2)))
+
+# Models
+models <- tribble(~model, ~predictors,
+                  "CogDrisk", "risk_score_cogd",
+                  "LIBRA2", "age + sex + educ + risk_score_libra2",
+                  
+                  # CRS and GRS as continuous measures
+                  "CogDrisk_cont", "apoe_burden + score_cogd_z + GRS + fhx_burden",
+                  "LIBRA2_cont", "age + sex + educ + apoe_burden + score_libra2_z + GRS + fhx_burden") 
+
+# Fitting models
+risk_preventad <- expand_grid(
+  outcome = BIOMARKERS_TRANS,
+  models
+  ) %>%
+  mutate(
+    eq = glue("{outcome} ~ {predictors}"),
+    res = map(eq, ~lm(as.formula(.), data = risk_dat)),
+    dataf = map(res, tidy),
+    mod = map(res, glance)
+  )
+```
+
+```{r regression-results}
+res_risk_preventad <- bind_rows(select(risk_preventad, model, outcome, dataf)) %>%
+  unnest(dataf) %>%
+  filter(
+    str_detect(term, '^risk_|^apoe_burden|^grs_|^fhx_burden|^score|^GRS$')
+  ) %>%
+  arrange(outcome, term, estimate) %>%
+  mutate(
+    # Significance flag
+    sig = ifelse(p.value < 0.05, TRUE, FALSE),
+    
+    # Confidence intervals
+    conf.low = estimate - (std.error * 1.96),
+    conf.high = estimate + (std.error * 1.96),
+    
+    # Exponentiated values for log-transformed outcomes 
+    exp_est = case_when(
+      str_detect(outcome, "_log") ~ exp(estimate),
+      TRUE ~ NA_real_
+    ),
+    exp_lci = case_when(
+      str_detect(outcome, "_log") ~ exp(conf.low),
+      TRUE ~ NA_real_
+    ),
+    exp_uci = case_when(
+      str_detect(outcome, "_log") ~ exp(conf.high),
+      TRUE ~ NA_real_
+    ),
+    pct_change = case_when(
+      str_detect(outcome, "_log") ~ (exp_est - 1) * 100,
+      TRUE ~ NA_real_
+    ),
+    
+    # Result category
+    res = case_when(
+      sig == TRUE ~ "Significant",
+      sig == FALSE ~ "Not Significant"
+    ),
+    stars = case_when(
+      p.value > 0.05 ~ "", 
+      between(p.value,  0.01, 0.05) ~ "*",
+      between(p.value, 0.001, 0.01) ~ "**",
+      p.value < 0.001 ~ "***"
+    ),
+    
+    # Composite score type
+    composite_type = if_else(str_detect(model, "CogDrisk"), "CogDrisk", "LIBRA2")
+  ) %>%
+  # Round numeric values
+  mutate(across(c(estimate, std.error, statistic, p.value, 
+                  conf.low, conf.high, exp_est, exp_lci, exp_uci, pct_change), 
+                ~round(., digits = 3)))
+```
+
+## Regression results
+
+### Multivariable associations
+
+```{r multivar-assoc-plot}
+#| fig-width: 14
+#| fig-height: 9
+#| out-width: "100%"
+
+outcome_labels <- c(
+  ab_ratio               = "A\u03b242/40",
+  gfap_log               = "GFAP (log)",
+  nfl_log                = "NfL (log)",
+  ptau181_log            = "p-tau181 (log)",
+  ptau217_log            = "p-tau217 (log)",
+  ptau217_ab42_ratio_log = "p-tau217/A\u03b242 (log)"
+)
+
+# Term ordering: top to bottom in plot
+term_order <- c(
+  "Clinical Risk Score",
+  "APOE \u03b54 Carrier",
+  "Family History (\u22652 FDR)",
+  "Genetic Risk Score"
+)
+
+plot_data_combined <- bind_rows(
+  res_risk_preventad %>%
+    filter(model == "CogDrisk_cont") %>%
+    mutate(
+      composite_type = "CogDrisk",
+      term = case_when(
+        term == "apoe_burden"  ~ "APOE \u03b54 Carrier",
+        term == "fhx_burden"   ~ "Family History (\u22652 FDR)",
+        term == "score_cogd_z" ~ "Clinical Risk Score",
+        term == "GRS"          ~ "Genetic Risk Score",
+        TRUE ~ term
+      )
+    ),
+  res_risk_preventad %>%
+    filter(model == "LIBRA2_cont") %>%
+    mutate(
+      composite_type = "LIBRA2",
+      term = case_when(
+        term == "apoe_burden"   ~ "APOE \u03b54 Carrier",
+        term == "fhx_burden"    ~ "Family History (\u22652 FDR)",
+        term == "score_libra2_z" ~ "Clinical Risk Score",
+        term == "GRS"           ~ "Genetic Risk Score",
+        TRUE ~ term
+      )
+    )
+) %>%
+  mutate(
+    sig            = factor(sig, levels = c(TRUE, FALSE)),
+    composite_type = factor(composite_type, levels = c("CogDrisk", "LIBRA2")),
+    outcome_label  = outcome_labels[outcome],
+    term           = factor(term, levels = rev(term_order))
+  )
+
+caption_text <- paste0(
+  "Cohort: PREVENT-AD. N = ", nrow(risk_dat), "\n",
+  "Models: Biomarker ~ APOE \u03b54 + Composite Score + Genetic Risk Score + Family History\n",
+  "Composite scores z-scored; \u03b2 reflects per-SD change. ",
+  "Shared terms (APOE \u03b54, GRS, Family History) estimated separately per model."
+)
+
+res_plot_combined <- ggplot(
+  plot_data_combined,
+  aes(y = term, x = estimate,
+      xmin = conf.low, xmax = conf.high,
+      color = composite_type,
+      alpha = sig,
+      group = composite_type)
+) +
+  geom_point(size = 3, position = position_dodge(width = 0.6)) +
+  geom_errorbarh(linewidth = 0.8, position = position_dodge(width = 0.6), height = 0.3) +
+  geom_vline(xintercept = 0, linetype = 2, color = "grey40") +
+  scale_alpha_manual(
+    values = c(`FALSE` = 0.25, `TRUE` = 1),
+    labels = c(`FALSE` = "Not Significant", `TRUE` = "Significant"),
+    name = "Significance"
+  ) +
+  scale_color_manual(
+    values = c("CogDrisk" = "#374E55FF", "LIBRA2" = "#DF8F44FF"),
+    breaks = c("CogDrisk", "LIBRA2"),
+    name = "Model"
+  ) +
+  facet_wrap(~outcome_label, scales = "free_x", ncol = 3) +
+  labs(
+    x       = "Beta (95% CI)",
+    y       = "Predictor",
+    title   = "Figure 1. Composite Risk Burden Components Coefficient Plots",
+    caption = caption_text
+  ) +
+  theme_bw() +
+  theme(
+    axis.text.y    = element_text(size = 10),
+    axis.text.x    = element_text(size = 10),
+    axis.title     = element_text(size = 12, face = "bold"),
+    plot.title     = element_text(size = 15, hjust = 0.5, face = "bold"),
+    plot.caption   = element_text(size = 9, hjust = 0, lineheight = 1.2,
+                                  margin = margin(t = 10)),
+    strip.background = element_rect(fill = "grey90"),
+    strip.text     = element_text(face = "bold", size = 11),
+    legend.position = "bottom",
+    legend.title   = element_text(size = 10, face = "bold"),
+    legend.text    = element_text(size = 9)
+  )
+
+res_plot_combined
+
+# ggsave(file.path(AIM1_OUTPUT_PATH$figures, "fig1_risk_lm_res.png"),
+#        res_plot_combined,
+#        width = 16, height = 10, dpi = 300)
+```
+
+```{r multivar-assoc-table}
+biomarker_order_mv <- c(
+  "A\u03b242/40 ratio", "GFAP (log)", "NfL (log)",
+  "p-tau181 (log)", "p-tau217 (log)", "p-tau217/A\u03b242 ratio (log)"
+)
+
+term_order_mv <- c(
+  "Clinical Risk Score", "APOE \u03b54 Carrier", "Genetic Risk Score", "Family History (\u22652 FDR)",
+  "Covariates",
+  "Age", "Sex (Male)", "Education (years)"
+)
+
+covariate_terms <- c("Age", "Sex (Male)", "Education (years)")
+
+multivar_raw <- risk_preventad %>%
+  filter(model %in% c("CogDrisk_cont", "LIBRA2_cont")) %>%
+  select(model, outcome, dataf) %>%
+  unnest(dataf) %>%
+  filter(term != "(Intercept)") %>%
+  mutate(
+    conf.low    = estimate - 1.96 * std.error,
+    conf.high   = estimate + 1.96 * std.error,
+    beta_se     = sprintf("%.3f (%.3f)", estimate, std.error),
+    ci          = sprintf("[%.3f, %.3f]", conf.low, conf.high),
+    p_fmt       = if_else(p.value < 0.001, "<0.001", sprintf("%.3f", p.value)),
+    stars       = case_when(
+      p.value < 0.001 ~ "***",
+      p.value < 0.01  ~ "**",
+      p.value < 0.05  ~ "*",
+      TRUE            ~ ""
+    ),
+    model_short = if_else(str_detect(model, "CogDrisk"), "CogDrisk", "LIBRA2"),
+    biomarker   = case_when(
+      outcome == "ab_ratio"               ~ "A\u03b242/40 ratio",
+      outcome == "gfap_log"               ~ "GFAP (log)",
+      outcome == "nfl_log"                ~ "NfL (log)",
+      outcome == "ptau181_log"            ~ "p-tau181 (log)",
+      outcome == "ptau217_log"            ~ "p-tau217 (log)",
+      outcome == "ptau217_ab42_ratio_log" ~ "p-tau217/A\u03b242 ratio (log)"
+    ),
+    term_label  = case_when(
+      term %in% c("score_cogd_z", "score_libra2_z") ~ "Clinical Risk Score",
+      term == "apoe_burden"                          ~ "APOE \u03b54 Carrier",
+      term == "GRS"                                  ~ "Genetic Risk Score",
+      term == "fhx_burden"                           ~ "Family History (\u22652 FDR)",
+      term == "age"                                  ~ "Age",
+      term == "sexMale"                              ~ "Sex",
+      term == "educ"                                 ~ "Education (years)",
+      TRUE ~ term
+    )
+  )
+
+multivar_wide <- multivar_raw %>%
+  select(model_short, biomarker, term_label, beta_se, ci, p_fmt, stars) %>%
+  pivot_wider(
+    names_from  = model_short,
+    values_from = c(beta_se, ci, p_fmt, stars),
+    names_glue  = "{model_short}_{.value}"
+  ) %>%
+  mutate(
+    across(c(CogDrisk_beta_se, CogDrisk_ci, CogDrisk_p_fmt), ~replace_na(., "\u2014")),
+    CogDrisk_stars = replace_na(CogDrisk_stars, "")
+  )
+
+# "Covariates" label row per biomarker — acts as a sub-section header
+covariate_header <- multivar_wide %>%
+  distinct(biomarker) %>%
+  mutate(
+    term_label       = "Covariates",
+    CogDrisk_beta_se = "", CogDrisk_ci = "", CogDrisk_p_fmt = "", CogDrisk_stars = "",
+    LIBRA2_beta_se   = "", LIBRA2_ci   = "", LIBRA2_p_fmt   = "", LIBRA2_stars   = ""
+  )
+
+multivar_combined <- bind_rows(multivar_wide, covariate_header) %>%
+  mutate(
+    biomarker  = factor(biomarker,  levels = biomarker_order_mv),
+    term_label = factor(term_label, levels = term_order_mv)
+  ) %>%
+  arrange(biomarker, term_label) %>%
+  select(biomarker, term_label,
+         CogDrisk_beta_se, CogDrisk_ci, CogDrisk_p_fmt, CogDrisk_stars,
+         LIBRA2_beta_se,   LIBRA2_ci,   LIBRA2_p_fmt,   LIBRA2_stars)
+
+multivar_gt <- multivar_combined %>%
+  gt(groupname_col = "biomarker") %>%
+  tab_header(
+    title    = md("**Table S2.** Multivariable Associations between Composite Risk Burden and Plasma Biomarkers"),
+    subtitle = md(glue("Linear regression; N = {nrow(risk_dat)}. Clinical risk scores z-scored (\u03b2 per SD)."))
+  ) %>%
+  tab_spanner(
+    label   = md("**CogDrisk**"),
+    columns = starts_with("CogDrisk_")
+  ) %>%
+  tab_spanner(
+    label   = md("**LIBRA2**"),
+    columns = starts_with("LIBRA2_")
+  ) %>%
+  cols_label(
+    term_label       = md("**Predictor**"),
+    CogDrisk_beta_se = md("**\u03b2 (SE)**"),
+    CogDrisk_ci      = md("**95% CI**"),
+    CogDrisk_p_fmt   = md("**p**"),
+    CogDrisk_stars   = md(""),
+    LIBRA2_beta_se   = md("**\u03b2 (SE)**"),
+    LIBRA2_ci        = md("**95% CI**"),
+    LIBRA2_p_fmt     = md("**p**"),
+    LIBRA2_stars     = md("")
+  ) %>%
+  tab_style(
+    style     = cell_fill(color = "#e8f4e8"),
+    locations = cells_body(
+      columns = CogDrisk_p_fmt,
+      rows    = CogDrisk_stars %in% c("*", "**", "***")
+    )
+  ) %>%
+  tab_style(
+    style     = cell_fill(color = "#e8f4e8"),
+    locations = cells_body(
+      columns = LIBRA2_p_fmt,
+      rows    = LIBRA2_stars %in% c("*", "**", "***")
+    )
+  ) %>%
+  tab_style(
+    style     = list(cell_text(weight = "bold"),
+                     cell_fill(color = "#f8f9fa")),
+    locations = cells_row_groups()
+  ) %>%
+  # "Covariates" row styled as a sub-section header
+  tab_style(
+    style     = list(cell_text(weight = "bold", style = "italic"),
+                     cell_fill(color = "#f0f2f4")),
+    locations = cells_body(rows = term_label == "Covariates")
+  ) %>%
+  # Indent individual covariate rows
+  tab_style(
+    style     = cell_text(indent = px(16)),
+    locations = cells_body(
+      columns = term_label,
+      rows    = term_label %in% covariate_terms
+    )
+  ) %>%
+  tab_footnote(
+    footnote  = md("*** p<0.001; ** p<0.01; * p<0.05. CogDrisk model: biomarker ~ APOE \u03b54 + CogDrisk score (z) + genetic risk score + family history. LIBRA2 model: same risk predictors using LIBRA2 score (z), additionally adjusted for age, sex, and education. Highlighted cells indicate p<0.05. \u2014 = not applicable."),
+    locations = cells_column_spanners()
+  ) %>%
+  cols_align(align = "left",   columns = term_label) %>%
+  cols_align(align = "center", columns = c(starts_with("CogDrisk_"), starts_with("LIBRA2_"))) %>%
+  row_group_order(groups = biomarker_order_mv)
+
+multivar_gt
+
+# gtsave(multivar_gt, filename = file.path(AIM1_OUTPUT_PATH$tables, "s_table2_multivar_assoc.docx"))
+```
+
+### Cross-sectional associations
+
+```{r xsect-assoc-plot}
+#| fig-width: 14
+#| fig-height: 9
+#| out-width: "100%"
+
+# --- Prediction grids ---
+# CogDrisk: biomarker ~ risk_score_cogd (no additional covariates)
+cogd_preds <- risk_preventad %>%
+  filter(model == "CogDrisk") %>%
+  mutate(
+    preds = map(res, ~{
+      nd <- data.frame(risk_score_cogd = seq(0, 4, by = 0.1))
+      predict(.x, newdata = nd, interval = "confidence") %>%
+        as_tibble() %>%
+        bind_cols(nd)
+    })
+  ) %>%
+  select(outcome, preds) %>%
+  unnest(preds) %>%
+  mutate(composite_type = "CogDrisk", risk_score = risk_score_cogd)
+
+# LIBRA2: biomarker ~ age + sex + educ + risk_score_libra2
+# Covariates held at mean (continuous) / "Female" (sex)
+libra2_preds <- risk_preventad %>%
+  filter(model == "LIBRA2") %>%
+  mutate(
+    preds = map(res, ~{
+      nd <- data.frame(
+        risk_score_libra2 = seq(0, 4, by = 0.1),
+        age  = mean(risk_dat$age,  na.rm = TRUE),
+        sex  = "Female",
+        educ = mean(risk_dat$educ, na.rm = TRUE)
+      )
+      predict(.x, newdata = nd, interval = "confidence") %>%
+        as_tibble() %>%
+        bind_cols(nd)
+    })
+  ) %>%
+  select(outcome, preds) %>%
+  unnest(preds) %>%
+  mutate(composite_type = "LIBRA2", risk_score = risk_score_libra2)
+
+pred_data <- bind_rows(cogd_preds, libra2_preds) %>%
+  mutate(
+    composite_type = factor(composite_type, levels = c("CogDrisk", "LIBRA2")),
+    outcome_label  = factor(outcome_labels[outcome], levels = outcome_labels)
+  )
+
+# --- Observed data (both scores in long format) ---
+obs_data <- bind_rows(
+  risk_dat %>%
+    pivot_longer(cols = all_of(BIOMARKERS_TRANS),
+                 names_to = "outcome", values_to = "measure") %>%
+    mutate(composite_type = "CogDrisk", risk_score = risk_score_cogd),
+  risk_dat %>%
+    pivot_longer(cols = all_of(BIOMARKERS_TRANS),
+                 names_to = "outcome", values_to = "measure") %>%
+    mutate(composite_type = "LIBRA2", risk_score = risk_score_libra2)
+) %>%
+  filter(!is.na(measure)) %>%
+  mutate(
+    composite_type = factor(composite_type, levels = c("CogDrisk", "LIBRA2")),
+    outcome_label  = factor(outcome_labels[outcome], levels = outcome_labels)
+  )
+
+# --- Per-facet annotations (β, 95% CI, p-value) ---
+annot_data <- bind_rows(
+  res_risk_preventad %>%
+    filter(model == "CogDrisk", term == "risk_score_cogd") %>%
+    mutate(composite_type = "CogDrisk"),
+  res_risk_preventad %>%
+    filter(model == "LIBRA2", term == "risk_score_libra2") %>%
+    mutate(composite_type = "LIBRA2")
+) %>%
+  mutate(
+    composite_type = factor(composite_type, levels = c("CogDrisk", "LIBRA2")),
+    outcome_label  = factor(outcome_labels[outcome], levels = outcome_labels),
+    p_fmt = if_else(p.value < 0.001, "< 0.001", as.character(p.value)),
+    annot = paste0("\u03b2 = ", estimate,
+                   " [", conf.low, ", ", conf.high, "], ",
+                   "p = ", p_fmt, if_else(stars == "", "", paste0(" ", stars)))
+  )
+
+# --- Plot ---
+p_xsect <- ggplot() +
+  geom_jitter(data = obs_data,
+              aes(x = risk_score, y = measure, color = composite_type),
+              width = 0.12, alpha = 0.15, size = 0.8) +
+  geom_ribbon(data = pred_data,
+              aes(x = risk_score, ymin = lwr, ymax = upr, fill = composite_type),
+              alpha = 0.2) +
+  geom_line(data = pred_data,
+            aes(x = risk_score, y = fit, color = composite_type),
+            linewidth = 1.2) +
+  geom_label(data = annot_data %>% filter(composite_type == "CogDrisk"),
+             aes(x = -Inf, y = Inf, label = annot),
+             inherit.aes = FALSE,
+             hjust = -0.1, vjust = 2,
+             size = 5, color = "#374E55FF",
+             label.padding = unit(0.15, "lines"),
+             fill = alpha("white", 0.85), label.size = 0.3) +
+  geom_label(data = annot_data %>% filter(composite_type == "LIBRA2"),
+             aes(x = Inf, y = -Inf, label = annot),
+             inherit.aes = FALSE,
+             hjust = 1.1, vjust = -2,
+             size = 5, color = "#DF8F44FF",
+             label.padding = unit(0.15, "lines"),
+             fill = alpha("white", 0.85), linewidth = 0.3) +
+  scale_color_manual(
+    values = c("CogDrisk" = "#374E55FF", "LIBRA2" = "#DF8F44FF"),
+    name = "Model"
+  ) +
+  scale_fill_manual(
+    values = c("CogDrisk" = "#374E55FF", "LIBRA2" = "#DF8F44FF"),
+    name = "Model"
+  ) +
+  scale_x_continuous(breaks = 0:4) +
+  facet_wrap(~outcome_label, scales = "free_y", ncol = 3) +
+  labs(
+    x       = "Composite Risk Score",
+    y       = "Biomarker Level",
+    title   = "Figure 2. Predicted Biomarker Levels by Composite Risk Score"
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    strip.background = element_rect(fill = "grey90"),
+    strip.text       = element_text(face = "bold", size = 11),
+    plot.title       = element_text(face = "bold", size = 15, hjust = 0.5),
+    legend.position  = "bottom",
+    legend.title     = element_text(size = 10, face = "bold"),
+    legend.text      = element_text(size = 9),
+    panel.grid.minor = element_blank()
+  )
+
+p_xsect
+# ggsave(file.path(AIM1_OUTPUT_PATH$figures, "fig2_xsectional.png"),
+#        p_xsect,
+#        width = 16, height = 10, dpi = 300)
+```
+
+```{r xsect-assoc-table}
+biomarker_order_xs <- c(
+  "A\u03b242/40 ratio", "GFAP (log)", "NfL (log)",
+  "p-tau181 (log)", "p-tau217 (log)", "p-tau217/A\u03b242 ratio (log)"
+)
+
+term_order_xs <- c(
+  "Composite Risk Score",
+  "Covariates",
+  "Age", "Sex (Male)", "Education (years)"
+)
+
+covariate_terms_xs <- c("Age", "Sex (Male)", "Education (years)")
+
+xsect_raw <- risk_preventad %>%
+  filter(model %in% c("CogDrisk", "LIBRA2")) %>%
+  select(model, outcome, dataf) %>%
+  unnest(dataf) %>%
+  filter(term != "(Intercept)") %>%
+  mutate(
+    conf.low    = estimate - 1.96 * std.error,
+    conf.high   = estimate + 1.96 * std.error,
+    beta_se     = sprintf("%.3f (%.3f)", estimate, std.error),
+    ci          = sprintf("[%.3f, %.3f]", conf.low, conf.high),
+    p_fmt       = if_else(p.value < 0.001, "<0.001", sprintf("%.3f", p.value)),
+    stars       = case_when(
+      p.value < 0.001 ~ "***",
+      p.value < 0.01  ~ "**",
+      p.value < 0.05  ~ "*",
+      TRUE            ~ ""
+    ),
+    model_short = model,
+    biomarker   = case_when(
+      outcome == "ab_ratio"               ~ "A\u03b242/40 ratio",
+      outcome == "gfap_log"               ~ "GFAP (log)",
+      outcome == "nfl_log"                ~ "NfL (log)",
+      outcome == "ptau181_log"            ~ "p-tau181 (log)",
+      outcome == "ptau217_log"            ~ "p-tau217 (log)",
+      outcome == "ptau217_ab42_ratio_log" ~ "p-tau217/A\u03b242 ratio (log)"
+    ),
+    term_label  = case_when(
+      term %in% c("risk_score_cogd", "risk_score_libra2") ~ "Composite Risk Score",
+      term == "age"                                        ~ "Age",
+      term == "sexMale"                                    ~ "Sex (Male)",
+      term == "educ"                                       ~ "Education (years)",
+      TRUE ~ term
+    )
+  )
+
+xsect_wide <- xsect_raw %>%
+  select(model_short, biomarker, term_label, beta_se, ci, p_fmt, stars) %>%
+  pivot_wider(
+    names_from  = model_short,
+    values_from = c(beta_se, ci, p_fmt, stars),
+    names_glue  = "{model_short}_{.value}"
+  ) %>%
+  mutate(
+    across(c(CogDrisk_beta_se, CogDrisk_ci, CogDrisk_p_fmt), ~replace_na(., "\u2014")),
+    CogDrisk_stars = replace_na(CogDrisk_stars, "")
+  )
+
+# "Covariates" label row per biomarker — acts as a sub-section header
+covariate_header_xs <- xsect_wide %>%
+  distinct(biomarker) %>%
+  mutate(
+    term_label       = "Covariates",
+    CogDrisk_beta_se = "", CogDrisk_ci = "", CogDrisk_p_fmt = "", CogDrisk_stars = "",
+    LIBRA2_beta_se   = "", LIBRA2_ci   = "", LIBRA2_p_fmt   = "", LIBRA2_stars   = ""
+  )
+
+xsect_combined <- bind_rows(xsect_wide, covariate_header_xs) %>%
+  mutate(
+    biomarker  = factor(biomarker,  levels = biomarker_order_xs),
+    term_label = factor(term_label, levels = term_order_xs)
+  ) %>%
+  arrange(biomarker, term_label) %>%
+  select(biomarker, term_label,
+         CogDrisk_beta_se, CogDrisk_ci, CogDrisk_p_fmt, CogDrisk_stars,
+         LIBRA2_beta_se,   LIBRA2_ci,   LIBRA2_p_fmt,   LIBRA2_stars)
+
+xsect_gt <- xsect_combined %>%
+  gt(groupname_col = "biomarker") %>%
+  tab_header(
+    title    = md("**Table S3.** Cross-sectional Associations between Composite Risk Score and Plasma Biomarkers"),
+    subtitle = md(glue("Linear regression; N = {nrow(risk_dat)}."))
+  ) %>%
+  tab_spanner(
+    label   = md("**CogDrisk**"),
+    columns = starts_with("CogDrisk_")
+  ) %>%
+  tab_spanner(
+    label   = md("**LIBRA2**"),
+    columns = starts_with("LIBRA2_")
+  ) %>%
+  cols_label(
+    term_label       = md("**Predictor**"),
+    CogDrisk_beta_se = md("**\u03b2 (SE)**"),
+    CogDrisk_ci      = md("**95% CI**"),
+    CogDrisk_p_fmt   = md("**p**"),
+    CogDrisk_stars   = md(""),
+    LIBRA2_beta_se   = md("**\u03b2 (SE)**"),
+    LIBRA2_ci        = md("**95% CI**"),
+    LIBRA2_p_fmt     = md("**p**"),
+    LIBRA2_stars     = md("")
+  ) %>%
+  tab_style(
+    style     = cell_fill(color = "#e8f4e8"),
+    locations = cells_body(
+      columns = CogDrisk_p_fmt,
+      rows    = CogDrisk_stars %in% c("*", "**", "***")
+    )
+  ) %>%
+  tab_style(
+    style     = cell_fill(color = "#e8f4e8"),
+    locations = cells_body(
+      columns = LIBRA2_p_fmt,
+      rows    = LIBRA2_stars %in% c("*", "**", "***")
+    )
+  ) %>%
+  tab_style(
+    style     = list(cell_text(weight = "bold"),
+                     cell_fill(color = "#f8f9fa")),
+    locations = cells_row_groups()
+  ) %>%
+  # "Covariates" row styled as a sub-section header
+  tab_style(
+    style     = list(cell_text(weight = "bold", style = "italic"),
+                     cell_fill(color = "#f0f2f4")),
+    locations = cells_body(rows = term_label == "Covariates")
+  ) %>%
+  # Indent individual covariate rows
+  tab_style(
+    style     = cell_text(indent = px(16)),
+    locations = cells_body(
+      columns = term_label,
+      rows    = term_label %in% covariate_terms_xs
+    )
+  ) %>%
+  tab_footnote(
+    footnote  = md("*** p<0.001; ** p<0.01; * p<0.05. CogDrisk model: biomarker ~ composite risk score (no additional covariates). LIBRA2 model: biomarker ~ composite risk score + age + sex + education. Highlighted cells indicate p<0.05. \u2014 = not applicable."),
+    locations = cells_column_spanners()
+  ) %>%
+  cols_align(align = "left",   columns = term_label) %>%
+  cols_align(align = "center", columns = c(starts_with("CogDrisk_"), starts_with("LIBRA2_"))) %>%
+  row_group_order(groups = biomarker_order_xs)
+
+xsect_gt
+gtsave(xsect_gt, filename = file.path(AIM1_OUTPUT_PATH$tables, "s_table3_xsect_assoc.docx"))
+```
+
+## Save results
+
+```{r save-results}
+# Save main results table
+df <- res_risk_preventad %>%
+  filter(!str_detect(model, '_cont'))
+
+write_csv(res_risk_preventad, file.path(AIM1_OUTPUT_PATH$tables, "crosssectional_results.csv"))
+```
