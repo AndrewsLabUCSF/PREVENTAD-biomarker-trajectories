@@ -55,6 +55,8 @@ table1_data <- baseline_dat %>%
     age, female, educ, caucasian,
     # AD risk factors
     apoe, FDR_AD, GRS, score_cogd, score_libra2,
+    # Risk indicators (binarized)
+    apoe_burden, grs_burden, fhx_burden, cogdrisk_burden, libra2_burden,
     # Baseline biomarkers
     ab_ratio, gfap, nfl, ptau181, ptau217, ptau217_ab42_ratio,
     # Grouping variable
@@ -66,24 +68,34 @@ table1_gtsummary <- table1_data %>%
     by = mci_status,
     type = list(
       female    ~ "dichotomous",
-      caucasian ~ "dichotomous"
+      caucasian ~ "dichotomous",
+      apoe_burden ~ "dichotomous",
+      fhx_burden ~ "dichotomous",
+      cogdrisk_burden ~ "dichotomous", 
+      libra2_burden ~ "dichotomous", 
+      grs_burden ~ "dichotomous"
     ),
     label = list(
-      age                  = "Age (years)",
-      female               = "Female",
-      educ                 = "Years of education",
-      caucasian            = "Caucasian",
-      apoe                 = "APOE genotype",
-      FDR_AD               = "FDRs with AD",
-      GRS                  = "Genetic risk score",
-      score_cogd           = "CogDrisk score",
-      score_libra2         = "LIBRA2 score",
-      ab_ratio             = "A\u03b242/A\u03b240 ratio",
-      gfap                 = "GFAP (pg/mL)",
-      nfl                  = "NfL (pg/mL)",
-      ptau181              = "p-tau181 (pg/mL)",
-      ptau217              = "p-tau217 (pg/mL)",
-      ptau217_ab42_ratio   = "p-tau217/A\u03b242 ratio"
+      age                = "Age (years)",
+      female             = "Female",
+      educ               = "Years of education",
+      caucasian          = "Caucasian",
+      apoe               = "APOE genotype",
+      FDR_AD             = "FDRs with AD",
+      GRS                = "Genetic risk score",
+      score_cogd         = "CogDrisk score",
+      score_libra2       = "LIBRA2 score",
+      apoe_burden        = "APOE e4+",
+      fhx_burden         = "Family history of AD",
+      cogdrisk_burden    = "CogDrisk ≥8",
+      libra2_burden      = "LIBRA2 ≥7.3",
+      grs_burden         = "PRS ≥75%",
+      ab_ratio           = "A\u03b242/A\u03b240 ratio",
+      gfap               = "GFAP (pg/mL)",
+      nfl                = "NfL (pg/mL)",
+      ptau181            = "p-tau181 (pg/mL)",
+      ptau217            = "p-tau217 (pg/mL)",
+      ptau217_ab42_ratio = "p-tau217/A\u03b242 ratio"
     ),
     statistic = list(
       all_continuous()  ~ "{mean} ({sd})",
@@ -103,10 +115,12 @@ table1_gtsummary <- table1_data %>%
     ~.x %>%
       mutate(
         grouping = case_when(
-          variable %in% c("age", "female", "educ", "caucasian")                            ~ "Demographics",
-          variable %in% c("apoe", "FDR_AD", "GRS", "score_cogd", "score_libra2")  ~ "AD Risk Factors",
+          variable %in% c("age", "female", "educ", "caucasian")                   ~ "Demographics",
+          variable %in% c("apoe", "FDR_AD", "GRS", "score_cogd", "score_libra2")  ~ "AD risk factors",
+          variable %in% c("apoe_burden", "fhx_burden", "cogdrisk_burden", "libra2_burden",
+                          "grs_burden")                                           ~ "AD risk indicators", 
           variable %in% c("ab_ratio", "gfap", "nfl", "ptau181",
-                          "ptau217", "ptau217_ab42_ratio")                                 ~ "Baseline Biomarkers",
+                          "ptau217", "ptau217_ab42_ratio")                        ~ "Baseline biomarkers",
           TRUE ~ NA_character_
         )
       )
@@ -122,18 +136,23 @@ table1_gt <- table1_gtsummary %>%
     subtitle = md("Stratified by Cognitive Progression Status")
   ) %>%
   tab_row_group(
-    label = md("**Baseline Biomarkers**"),
-    rows  = grouping == "Baseline Biomarkers"
+    label = md("**Baseline biomarkers**"),
+    rows  = grouping == "Baseline biomarkers"
   ) %>%
   tab_row_group(
-    label = md("**AD Risk Factors**"),
-    rows  = grouping == "AD Risk Factors"
+    label = md("**AD risk factors**"),
+    rows  = grouping == "AD risk factors"
+  ) %>%
+  tab_row_group(
+    label = md("**AD risk indicators**"),
+    rows  = grouping == "AD risk indicators"
   ) %>%
   tab_row_group(
     label = md("**Demographics**"),
     rows  = grouping == "Demographics"
   ) %>%
-  row_group_order(groups = c("**Demographics**", "**AD Risk Factors**", "**Baseline Biomarkers**")) %>%
+  row_group_order(groups = c("**Demographics**", "**AD risk indicators**",
+                            "**AD risk factors**", "**Baseline biomarkers**")) %>%
   tab_style(
     style     = list(cell_text(weight = "bold"),
                      cell_fill(color = "#f8f9fa")),
@@ -143,7 +162,7 @@ table1_gt <- table1_gtsummary %>%
 
 table1_gt
 
-gtsave(table1_gt, filename = file.path(EDA_OUTPUT_PATH$tables, "table1_baseline_characteristics.docx"))
+gtsave(table1_gt, filename = file.path(EDA_OUTPUT_PATH$tables, "table1_baseline_characteristics.png"))
 ```
 
 # Table 2: Cross-Sectional Associations between Composite Risk Burden and Plasma Biomarkers

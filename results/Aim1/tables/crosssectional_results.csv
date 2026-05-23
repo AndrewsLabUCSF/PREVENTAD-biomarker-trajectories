@@ -1,97 +1,61 @@
-model,outcome,term,estimate,std.error,statistic,p.value,sig,conf.low,conf.high,exp_est,exp_lci,exp_uci,pct_change,res,stars,composite_type
-LIBRA2_cont,ab_ratio,GRS,-0.001,0.002,-0.226,0.821,FALSE,-0.005,0.004,NA,NA,NA,NA,Not Significant,,LIBRA2
-CogDrisk,ab_ratio,GRS,-0,0.002,-0.192,0.848,FALSE,-0.005,0.004,NA,NA,NA,NA,Not Significant,,CogDrisk
-CogDrisk_cont,ab_ratio,GRS,-0,0.002,-0.192,0.848,FALSE,-0.005,0.004,NA,NA,NA,NA,Not Significant,,CogDrisk
-LIBRA2,ab_ratio,GRS,-0,0.002,-0.153,0.879,FALSE,-0.005,0.004,NA,NA,NA,NA,Not Significant,,LIBRA2
-LIBRA2_cont,ab_ratio,apoe_burden,-0.006,0.002,-3.575,0,TRUE,-0.009,-0.003,NA,NA,NA,NA,Significant,***,LIBRA2
-CogDrisk,ab_ratio,apoe_burden,-0.006,0.002,-3.529,0,TRUE,-0.009,-0.003,NA,NA,NA,NA,Significant,***,CogDrisk
-CogDrisk_cont,ab_ratio,apoe_burden,-0.006,0.002,-3.529,0,TRUE,-0.009,-0.003,NA,NA,NA,NA,Significant,***,CogDrisk
-LIBRA2,ab_ratio,apoe_burden,-0.006,0.002,-3.534,0,TRUE,-0.009,-0.003,NA,NA,NA,NA,Significant,***,LIBRA2
-LIBRA2_cont,ab_ratio,fhx_burden,-0.004,0.002,-1.739,0.083,FALSE,-0.008,0,NA,NA,NA,NA,Not Significant,,LIBRA2
-CogDrisk_cont,ab_ratio,fhx_burden,-0.004,0.002,-1.709,0.089,FALSE,-0.008,0.001,NA,NA,NA,NA,Not Significant,,CogDrisk
-CogDrisk,ab_ratio,fhx_burden,-0.004,0.002,-1.709,0.089,FALSE,-0.008,0.001,NA,NA,NA,NA,Not Significant,,CogDrisk
-LIBRA2,ab_ratio,fhx_burden,-0.003,0.002,-1.429,0.154,FALSE,-0.007,0.001,NA,NA,NA,NA,Not Significant,,LIBRA2
-CogDrisk,ab_ratio,score_cogd,-0,0,-0.364,0.716,FALSE,-0,0,NA,NA,NA,NA,Not Significant,,CogDrisk
-LIBRA2,ab_ratio,score_cogd,0,0,1.219,0.224,FALSE,-0,0.001,NA,NA,NA,NA,Not Significant,,LIBRA2
-CogDrisk_cont,ab_ratio,score_cogd_z,-0,0.001,-0.364,0.716,FALSE,-0.002,0.001,NA,NA,NA,NA,Not Significant,,CogDrisk
-LIBRA2_cont,ab_ratio,score_libra2_z,0.001,0.001,0.967,0.335,FALSE,-0.001,0.002,NA,NA,NA,NA,Not Significant,,LIBRA2
-LIBRA2,gfap_log,GRS,0.169,0.073,2.334,0.02,TRUE,0.027,0.312,1.185,1.028,1.366,18.468,Significant,*,LIBRA2
-CogDrisk_cont,gfap_log,GRS,0.187,0.08,2.342,0.02,TRUE,0.03,0.343,1.205,1.031,1.41,20.547,Significant,*,CogDrisk
-CogDrisk,gfap_log,GRS,0.187,0.08,2.342,0.02,TRUE,0.03,0.343,1.205,1.031,1.41,20.547,Significant,*,CogDrisk
-LIBRA2_cont,gfap_log,GRS,0.188,0.08,2.339,0.02,TRUE,0.031,0.346,1.207,1.031,1.413,20.718,Significant,*,LIBRA2
-LIBRA2_cont,gfap_log,apoe_burden,0.138,0.059,2.323,0.021,TRUE,0.022,0.255,1.148,1.022,1.29,14.809,Significant,*,LIBRA2
-CogDrisk,gfap_log,apoe_burden,0.145,0.059,2.462,0.014,TRUE,0.03,0.26,1.156,1.03,1.297,15.6,Significant,*,CogDrisk
-CogDrisk_cont,gfap_log,apoe_burden,0.145,0.059,2.462,0.014,TRUE,0.03,0.26,1.156,1.03,1.297,15.6,Significant,*,CogDrisk
-LIBRA2,gfap_log,apoe_burden,0.202,0.054,3.721,0,TRUE,0.095,0.308,1.223,1.1,1.36,22.338,Significant,***,LIBRA2
-LIBRA2,gfap_log,fhx_burden,0.045,0.065,0.698,0.486,FALSE,-0.082,0.172,1.046,0.922,1.188,4.621,Not Significant,,LIBRA2
-CogDrisk_cont,gfap_log,fhx_burden,0.068,0.071,0.955,0.34,FALSE,-0.071,0.207,1.07,0.931,1.23,7.018,Not Significant,,CogDrisk
-CogDrisk,gfap_log,fhx_burden,0.068,0.071,0.955,0.34,FALSE,-0.071,0.207,1.07,0.931,1.23,7.018,Not Significant,,CogDrisk
-LIBRA2_cont,gfap_log,fhx_burden,0.09,0.071,1.267,0.206,FALSE,-0.049,0.23,1.094,0.952,1.258,9.428,Not Significant,,LIBRA2
-LIBRA2,gfap_log,score_cogd,-0.005,0.006,-0.73,0.466,FALSE,-0.017,0.008,0.995,0.983,1.008,-0.457,Not Significant,,LIBRA2
-CogDrisk,gfap_log,score_cogd,0.014,0.006,2.315,0.021,TRUE,0.002,0.026,1.014,1.002,1.026,1.395,Significant,*,CogDrisk
-CogDrisk_cont,gfap_log,score_cogd_z,0.066,0.028,2.315,0.021,TRUE,0.01,0.121,1.068,1.01,1.129,6.773,Significant,*,CogDrisk
-LIBRA2_cont,gfap_log,score_libra2_z,0.026,0.029,0.903,0.367,FALSE,-0.03,0.082,1.026,0.97,1.086,2.636,Not Significant,,LIBRA2
-LIBRA2,nfl_log,GRS,0.137,0.063,2.16,0.032,TRUE,0.013,0.261,1.146,1.013,1.298,14.638,Significant,*,LIBRA2
-CogDrisk,nfl_log,GRS,0.145,0.069,2.092,0.037,TRUE,0.009,0.281,1.156,1.009,1.324,15.589,Significant,*,CogDrisk
-CogDrisk_cont,nfl_log,GRS,0.145,0.069,2.092,0.037,TRUE,0.009,0.281,1.156,1.009,1.324,15.589,Significant,*,CogDrisk
-LIBRA2_cont,nfl_log,GRS,0.149,0.07,2.111,0.036,TRUE,0.011,0.287,1.16,1.011,1.332,16.038,Significant,*,LIBRA2
-LIBRA2_cont,nfl_log,apoe_burden,-0.037,0.052,-0.715,0.475,FALSE,-0.139,0.065,0.963,0.87,1.067,-3.655,Not Significant,,LIBRA2
-CogDrisk_cont,nfl_log,apoe_burden,-0.033,0.051,-0.648,0.518,FALSE,-0.133,0.067,0.967,0.875,1.069,-3.257,Not Significant,,CogDrisk
-CogDrisk,nfl_log,apoe_burden,-0.033,0.051,-0.648,0.518,FALSE,-0.133,0.067,0.967,0.875,1.069,-3.257,Not Significant,,CogDrisk
-LIBRA2,nfl_log,apoe_burden,0.016,0.047,0.349,0.727,FALSE,-0.076,0.109,1.017,0.927,1.115,1.662,Not Significant,,LIBRA2
-LIBRA2,nfl_log,fhx_burden,0.092,0.056,1.625,0.105,FALSE,-0.019,0.202,1.096,0.981,1.224,9.601,Not Significant,,LIBRA2
-CogDrisk,nfl_log,fhx_burden,0.114,0.062,1.856,0.065,FALSE,-0.006,0.235,1.121,0.994,1.265,12.123,Not Significant,,CogDrisk
-CogDrisk_cont,nfl_log,fhx_burden,0.114,0.062,1.856,0.065,FALSE,-0.006,0.235,1.121,0.994,1.265,12.123,Not Significant,,CogDrisk
-LIBRA2_cont,nfl_log,fhx_burden,0.137,0.062,2.201,0.029,TRUE,0.015,0.259,1.147,1.015,1.296,14.682,Significant,*,LIBRA2
-LIBRA2,nfl_log,score_cogd,-0.002,0.005,-0.322,0.747,FALSE,-0.012,0.009,0.998,0.988,1.009,-0.176,Not Significant,,LIBRA2
-CogDrisk,nfl_log,score_cogd,0.015,0.005,2.98,0.003,TRUE,0.005,0.026,1.016,1.005,1.026,1.56,Significant,**,CogDrisk
-CogDrisk_cont,nfl_log,score_cogd_z,0.073,0.025,2.98,0.003,TRUE,0.025,0.121,1.076,1.025,1.129,7.598,Significant,**,CogDrisk
-LIBRA2_cont,nfl_log,score_libra2_z,-0.001,0.025,-0.026,0.979,FALSE,-0.05,0.049,0.999,0.951,1.05,-0.067,Not Significant,,LIBRA2
-CogDrisk,ptau181_log,GRS,0.066,0.095,0.69,0.491,FALSE,-0.121,0.252,1.068,0.886,1.286,6.772,Not Significant,,CogDrisk
-CogDrisk_cont,ptau181_log,GRS,0.066,0.095,0.69,0.491,FALSE,-0.121,0.252,1.068,0.886,1.286,6.772,Not Significant,,CogDrisk
-LIBRA2,ptau181_log,GRS,0.067,0.092,0.73,0.466,FALSE,-0.113,0.247,1.069,0.893,1.28,6.919,Not Significant,,LIBRA2
-LIBRA2_cont,ptau181_log,GRS,0.07,0.096,0.732,0.465,FALSE,-0.117,0.257,1.072,0.889,1.293,7.237,Not Significant,,LIBRA2
-LIBRA2_cont,ptau181_log,apoe_burden,0.224,0.071,3.181,0.002,TRUE,0.086,0.363,1.252,1.09,1.437,25.157,Significant,**,LIBRA2
-CogDrisk,ptau181_log,apoe_burden,0.226,0.07,3.225,0.001,TRUE,0.089,0.363,1.254,1.093,1.438,25.354,Significant,**,CogDrisk
-CogDrisk_cont,ptau181_log,apoe_burden,0.226,0.07,3.225,0.001,TRUE,0.089,0.363,1.254,1.093,1.438,25.354,Significant,**,CogDrisk
-LIBRA2,ptau181_log,apoe_burden,0.259,0.068,3.793,0,TRUE,0.125,0.394,1.296,1.134,1.482,29.627,Significant,***,LIBRA2
-LIBRA2,ptau181_log,fhx_burden,0.101,0.082,1.24,0.216,FALSE,-0.059,0.262,1.107,0.943,1.299,10.668,Not Significant,,LIBRA2
-CogDrisk,ptau181_log,fhx_burden,0.129,0.085,1.524,0.129,FALSE,-0.037,0.295,1.138,0.964,1.342,13.752,Not Significant,,CogDrisk
-CogDrisk_cont,ptau181_log,fhx_burden,0.129,0.085,1.524,0.129,FALSE,-0.037,0.295,1.138,0.964,1.342,13.752,Not Significant,,CogDrisk
-LIBRA2_cont,ptau181_log,fhx_burden,0.146,0.084,1.732,0.084,FALSE,-0.019,0.312,1.157,0.981,1.366,15.744,Not Significant,,LIBRA2
-LIBRA2,ptau181_log,score_cogd,-0.005,0.008,-0.569,0.57,FALSE,-0.02,0.011,0.996,0.98,1.011,-0.449,Not Significant,,LIBRA2
-CogDrisk,ptau181_log,score_cogd,0.013,0.007,1.786,0.075,FALSE,-0.001,0.027,1.013,0.999,1.027,1.28,Not Significant,,CogDrisk
-CogDrisk_cont,ptau181_log,score_cogd_z,0.06,0.034,1.786,0.075,FALSE,-0.006,0.126,1.062,0.994,1.135,6.201,Not Significant,,CogDrisk
-LIBRA2_cont,ptau181_log,score_libra2_z,-0.016,0.034,-0.46,0.646,FALSE,-0.083,0.051,0.984,0.921,1.053,-1.561,Not Significant,,LIBRA2
-CogDrisk,ptau217_ab42_ratio_log,GRS,-0.012,0.09,-0.136,0.892,FALSE,-0.188,0.163,0.988,0.829,1.177,-1.214,Not Significant,,CogDrisk
-CogDrisk_cont,ptau217_ab42_ratio_log,GRS,-0.012,0.09,-0.136,0.892,FALSE,-0.188,0.163,0.988,0.829,1.177,-1.214,Not Significant,,CogDrisk
-LIBRA2_cont,ptau217_ab42_ratio_log,GRS,-0.009,0.09,-0.102,0.919,FALSE,-0.185,0.167,0.991,0.831,1.182,-0.911,Not Significant,,LIBRA2
-LIBRA2,ptau217_ab42_ratio_log,GRS,-0.007,0.087,-0.081,0.935,FALSE,-0.178,0.164,0.993,0.837,1.178,-0.706,Not Significant,,LIBRA2
-LIBRA2_cont,ptau217_ab42_ratio_log,apoe_burden,0.378,0.066,5.69,0,TRUE,0.247,0.508,1.459,1.281,1.661,45.865,Significant,***,LIBRA2
-CogDrisk,ptau217_ab42_ratio_log,apoe_burden,0.378,0.066,5.725,0,TRUE,0.249,0.508,1.46,1.282,1.662,45.981,Significant,***,CogDrisk
-CogDrisk_cont,ptau217_ab42_ratio_log,apoe_burden,0.378,0.066,5.725,0,TRUE,0.249,0.508,1.46,1.282,1.662,45.981,Significant,***,CogDrisk
-LIBRA2,ptau217_ab42_ratio_log,apoe_burden,0.396,0.065,6.07,0,TRUE,0.268,0.523,1.485,1.307,1.688,48.525,Significant,***,LIBRA2
-LIBRA2,ptau217_ab42_ratio_log,fhx_burden,0.147,0.078,1.885,0.061,FALSE,-0.006,0.299,1.158,0.994,1.349,15.812,Not Significant,,LIBRA2
-CogDrisk,ptau217_ab42_ratio_log,fhx_burden,0.171,0.08,2.139,0.033,TRUE,0.014,0.327,1.186,1.014,1.386,18.591,Significant,*,CogDrisk
-CogDrisk_cont,ptau217_ab42_ratio_log,fhx_burden,0.171,0.08,2.139,0.033,TRUE,0.014,0.327,1.186,1.014,1.386,18.591,Significant,*,CogDrisk
-LIBRA2_cont,ptau217_ab42_ratio_log,fhx_burden,0.182,0.079,2.292,0.023,TRUE,0.026,0.338,1.2,1.027,1.401,19.954,Significant,*,LIBRA2
-LIBRA2,ptau217_ab42_ratio_log,score_cogd,-0.005,0.008,-0.641,0.522,FALSE,-0.02,0.01,0.995,0.981,1.01,-0.482,Not Significant,,LIBRA2
-CogDrisk,ptau217_ab42_ratio_log,score_cogd,0.008,0.007,1.263,0.208,FALSE,-0.005,0.022,1.009,0.995,1.022,0.852,Not Significant,,CogDrisk
-CogDrisk_cont,ptau217_ab42_ratio_log,score_cogd_z,0.04,0.032,1.263,0.208,FALSE,-0.022,0.102,1.041,0.978,1.108,4.096,Not Significant,,CogDrisk
-LIBRA2_cont,ptau217_ab42_ratio_log,score_libra2_z,-0.013,0.032,-0.392,0.696,FALSE,-0.076,0.05,0.987,0.927,1.052,-1.251,Not Significant,,LIBRA2
-CogDrisk,ptau217_log,GRS,0.018,0.079,0.221,0.826,FALSE,-0.138,0.173,1.018,0.871,1.189,1.767,Not Significant,,CogDrisk
-CogDrisk_cont,ptau217_log,GRS,0.018,0.079,0.221,0.826,FALSE,-0.138,0.173,1.018,0.871,1.189,1.767,Not Significant,,CogDrisk
-LIBRA2_cont,ptau217_log,GRS,0.019,0.08,0.236,0.813,FALSE,-0.139,0.177,1.019,0.871,1.193,1.919,Not Significant,,LIBRA2
-LIBRA2,ptau217_log,GRS,0.022,0.077,0.29,0.772,FALSE,-0.128,0.173,1.023,0.88,1.189,2.255,Not Significant,,LIBRA2
-LIBRA2_cont,ptau217_log,apoe_burden,0.328,0.059,5.541,0,TRUE,0.212,0.444,1.388,1.236,1.559,38.823,Significant,***,LIBRA2
-CogDrisk,ptau217_log,apoe_burden,0.334,0.058,5.739,0,TRUE,0.22,0.448,1.397,1.246,1.566,39.698,Significant,***,CogDrisk
-CogDrisk_cont,ptau217_log,apoe_burden,0.334,0.058,5.739,0,TRUE,0.22,0.448,1.397,1.246,1.566,39.698,Significant,***,CogDrisk
-LIBRA2,ptau217_log,apoe_burden,0.363,0.057,6.36,0,TRUE,0.251,0.475,1.438,1.286,1.608,43.798,Significant,***,LIBRA2
-LIBRA2,ptau217_log,fhx_burden,0.119,0.068,1.752,0.081,FALSE,-0.014,0.252,1.126,0.986,1.286,12.613,Not Significant,,LIBRA2
-CogDrisk_cont,ptau217_log,fhx_burden,0.139,0.07,1.991,0.047,TRUE,0.002,0.276,1.149,1.002,1.318,14.918,Significant,*,CogDrisk
-CogDrisk,ptau217_log,fhx_burden,0.139,0.07,1.991,0.047,TRUE,0.002,0.276,1.149,1.002,1.318,14.918,Significant,*,CogDrisk
-LIBRA2_cont,ptau217_log,fhx_burden,0.165,0.07,2.351,0.019,TRUE,0.027,0.303,1.179,1.028,1.353,17.941,Significant,*,LIBRA2
-LIBRA2,ptau217_log,score_cogd,0.003,0.007,0.455,0.65,FALSE,-0.01,0.016,1.003,0.99,1.016,0.304,Not Significant,,LIBRA2
-CogDrisk,ptau217_log,score_cogd,0.017,0.006,2.774,0.006,TRUE,0.005,0.029,1.017,1.005,1.029,1.688,Significant,**,CogDrisk
-CogDrisk_cont,ptau217_log,score_cogd_z,0.079,0.029,2.774,0.006,TRUE,0.023,0.135,1.082,1.024,1.145,8.243,Significant,**,CogDrisk
-LIBRA2_cont,ptau217_log,score_libra2_z,0.012,0.029,0.403,0.687,FALSE,-0.045,0.068,1.012,0.956,1.07,1.166,Not Significant,,LIBRA2
+model,outcome,term,estimate,std.error,statistic,p.value,p.adj,sig,conf.low,conf.high,exp_est,exp_lci,exp_uci,pct_change,stars,composite_type
+CogDrisk_cont,ab_ratio,GRS,0,0.002,0.054,0.957,0.9730328335767088,Not significant,-0.005,0.005,NA,NA,NA,NA,,CogDrisk
+LIBRA2_cont,ab_ratio,GRS,0,0.002,0.078,0.938,0.9701126414644626,Not significant,-0.004,0.005,NA,NA,NA,NA,,LIBRA2
+LIBRA2_cont,ab_ratio,apoe_burden,-0.006,0.002,-3.207,0.002,0.008054079327384502,Significant (FDR-adjusted),-0.009,-0.002,NA,NA,NA,NA,**,LIBRA2
+CogDrisk_cont,ab_ratio,apoe_burden,-0.006,0.002,-3.191,0.002,0.008054079327384502,Significant (FDR-adjusted),-0.009,-0.002,NA,NA,NA,NA,**,CogDrisk
+CogDrisk_cont,ab_ratio,fhx_burden,-0.004,0.002,-1.712,0.088,0.17624641507536437,Not significant,-0.008,0.001,NA,NA,NA,NA,,CogDrisk
+LIBRA2_cont,ab_ratio,fhx_burden,-0.003,0.002,-1.379,0.169,0.28210355861468306,Not significant,-0.007,0.001,NA,NA,NA,NA,,LIBRA2
+CogDrisk,ab_ratio,risk_score_cogd,-0.003,0.001,-3.026,0.003,0.011782585998527327,Significant (FDR-adjusted),-0.005,-0.001,NA,NA,NA,NA,*,CogDrisk
+LIBRA2,ab_ratio,risk_score_libra2,-0.002,0.001,-2.134,0.034,0.08340232602171113,Significant (non-adjusted),-0.004,-0,NA,NA,NA,NA,,LIBRA2
+CogDrisk_cont,ab_ratio,score_cogd_z,-0.001,0.001,-0.78,0.436,0.6086101087029453,Not significant,-0.002,0.001,NA,NA,NA,NA,,CogDrisk
+LIBRA2_cont,ab_ratio,score_libra2_z,0.001,0.001,0.938,0.349,0.5112249299110522,Not significant,-0.001,0.003,NA,NA,NA,NA,,LIBRA2
+LIBRA2_cont,gfap_log,GRS,0.177,0.077,2.287,0.023,0.06297439319238399,Significant (non-adjusted),0.025,0.329,1.194,1.026,1.389,19.374,,LIBRA2
+CogDrisk_cont,gfap_log,GRS,0.181,0.084,2.15,0.033,0.08340232602171113,Significant (non-adjusted),0.016,0.346,1.199,1.016,1.414,19.863,,CogDrisk
+CogDrisk_cont,gfap_log,apoe_burden,0.13,0.063,2.072,0.039,0.08918522997454816,Significant (non-adjusted),0.007,0.252,1.139,1.007,1.287,13.855,,CogDrisk
+LIBRA2_cont,gfap_log,apoe_burden,0.195,0.058,3.351,0.001,0.0056233051561229205,Significant (FDR-adjusted),0.081,0.309,1.216,1.084,1.363,21.553,**,LIBRA2
+LIBRA2_cont,gfap_log,fhx_burden,0.013,0.07,0.184,0.854,0.9151561883913087,Not significant,-0.124,0.15,1.013,0.883,1.162,1.296,,LIBRA2
+CogDrisk_cont,gfap_log,fhx_burden,0.045,0.076,0.596,0.552,0.7046493185259396,Not significant,-0.104,0.194,1.046,0.901,1.214,4.632,,CogDrisk
+CogDrisk,gfap_log,risk_score_cogd,0.096,0.037,2.627,0.009,0.028931762930201107,Significant (FDR-adjusted),0.024,0.168,1.101,1.025,1.183,10.123,*,CogDrisk
+LIBRA2,gfap_log,risk_score_libra2,0.086,0.035,2.462,0.015,0.04357970550190366,Significant (FDR-adjusted),0.018,0.154,1.09,1.018,1.167,8.97,*,LIBRA2
+CogDrisk_cont,gfap_log,score_cogd_z,0.073,0.03,2.423,0.016,0.046140326737107086,Significant (FDR-adjusted),0.014,0.131,1.075,1.014,1.14,7.528,*,CogDrisk
+LIBRA2_cont,gfap_log,score_libra2_z,0.017,0.028,0.603,0.547,0.7046493185259396,Not significant,-0.038,0.072,1.017,0.962,1.075,1.719,,LIBRA2
+CogDrisk_cont,nfl_log,GRS,0.134,0.072,1.87,0.063,0.1298652884986782,Not significant,-0.006,0.275,1.144,0.994,1.317,14.374,,CogDrisk
+LIBRA2_cont,nfl_log,GRS,0.14,0.066,2.124,0.035,0.08340232602171113,Significant (non-adjusted),0.011,0.268,1.15,1.011,1.308,14.973,,LIBRA2
+CogDrisk_cont,nfl_log,apoe_burden,-0.026,0.053,-0.496,0.62,0.7594271733944469,Not significant,-0.131,0.078,0.974,0.877,1.081,-2.613,,CogDrisk
+LIBRA2_cont,nfl_log,apoe_burden,0.034,0.049,0.685,0.494,0.6740598035114604,Not significant,-0.063,0.131,1.034,0.939,1.14,3.441,,LIBRA2
+LIBRA2_cont,nfl_log,fhx_burden,0.057,0.059,0.965,0.335,0.503069617923088,Not significant,-0.059,0.174,1.059,0.943,1.19,5.898,,LIBRA2
+CogDrisk_cont,nfl_log,fhx_burden,0.093,0.065,1.428,0.155,0.2698052083282849,Not significant,-0.034,0.22,1.097,0.966,1.245,9.694,,CogDrisk
+CogDrisk,nfl_log,risk_score_cogd,0.065,0.031,2.064,0.04,0.08918522997454816,Significant (non-adjusted),0.003,0.126,1.067,1.003,1.135,6.689,,CogDrisk
+LIBRA2,nfl_log,risk_score_libra2,0.033,0.029,1.121,0.263,0.41584057777817285,Not significant,-0.024,0.09,1.033,0.976,1.094,3.326,,LIBRA2
+CogDrisk_cont,nfl_log,score_cogd_z,0.069,0.026,2.704,0.007,0.025891759071169192,Significant (FDR-adjusted),0.019,0.119,1.072,1.019,1.126,7.15,*,CogDrisk
+LIBRA2_cont,nfl_log,score_libra2_z,-0.008,0.024,-0.322,0.748,0.8629596054428357,Not significant,-0.055,0.039,0.992,0.947,1.04,-0.769,,LIBRA2
+CogDrisk_cont,ptau181_log,GRS,0.025,0.097,0.254,0.8,0.8754266967142378,Not significant,-0.166,0.215,1.025,0.847,1.24,2.5,,CogDrisk
+LIBRA2_cont,ptau181_log,GRS,0.039,0.096,0.404,0.686,0.8075677719495287,Not significant,-0.149,0.226,1.039,0.862,1.254,3.942,,LIBRA2
+CogDrisk_cont,ptau181_log,apoe_burden,0.206,0.072,2.852,0.005,0.017716297318509634,Significant (FDR-adjusted),0.065,0.348,1.229,1.067,1.416,22.907,*,CogDrisk
+LIBRA2_cont,ptau181_log,apoe_burden,0.243,0.072,3.379,0.001,0.0056233051561229205,Significant (FDR-adjusted),0.102,0.384,1.275,1.107,1.468,27.517,**,LIBRA2
+LIBRA2_cont,ptau181_log,fhx_burden,0.054,0.086,0.625,0.533,0.7046493185259396,Not significant,-0.115,0.223,1.055,0.891,1.25,5.55,,LIBRA2
+CogDrisk_cont,ptau181_log,fhx_burden,0.087,0.088,0.985,0.325,0.5007051644658828,Not significant,-0.086,0.259,1.09,0.918,1.295,9.036,,CogDrisk
+CogDrisk,ptau181_log,risk_score_cogd,0.113,0.042,2.678,0.008,0.026412854000005846,Significant (FDR-adjusted),0.03,0.195,1.119,1.031,1.215,11.924,*,CogDrisk
+LIBRA2,ptau181_log,risk_score_libra2,0.133,0.042,3.148,0.002,0.008553098329393561,Significant (FDR-adjusted),0.05,0.216,1.142,1.051,1.241,14.227,**,LIBRA2
+CogDrisk_cont,ptau181_log,score_cogd_z,0.056,0.035,1.626,0.105,0.19148332512555577,Not significant,-0.012,0.124,1.058,0.989,1.132,5.787,,CogDrisk
+LIBRA2_cont,ptau181_log,score_libra2_z,-0.009,0.035,-0.269,0.788,0.8754266967142378,Not significant,-0.078,0.059,0.991,0.925,1.061,-0.937,,LIBRA2
+CogDrisk_cont,ptau217_ab42_ratio_log,GRS,-0.051,0.092,-0.552,0.581,0.7267144299806012,Not significant,-0.231,0.129,0.951,0.794,1.138,-4.946,,CogDrisk
+LIBRA2_cont,ptau217_ab42_ratio_log,GRS,-0.04,0.091,-0.44,0.66,0.792377889609062,Not significant,-0.218,0.138,0.961,0.804,1.148,-3.922,,LIBRA2
+CogDrisk_cont,ptau217_ab42_ratio_log,apoe_burden,0.344,0.068,5.04,0,1.383889887498702e-5,Significant (FDR-adjusted),0.21,0.478,1.411,1.234,1.612,41.054,***,CogDrisk
+LIBRA2_cont,ptau217_ab42_ratio_log,apoe_burden,0.36,0.068,5.263,0,9.560284327479204e-6,Significant (FDR-adjusted),0.226,0.494,1.433,1.253,1.639,43.33,***,LIBRA2
+LIBRA2_cont,ptau217_ab42_ratio_log,fhx_burden,0.135,0.082,1.641,0.102,0.19148332512555577,Not significant,-0.026,0.296,1.144,0.974,1.344,14.432,,LIBRA2
+CogDrisk_cont,ptau217_ab42_ratio_log,fhx_burden,0.162,0.083,1.952,0.052,0.11175484572362349,Not significant,-0.001,0.324,1.176,0.999,1.383,17.553,,CogDrisk
+CogDrisk,ptau217_ab42_ratio_log,risk_score_cogd,0.153,0.041,3.764,0,0.001576258836322854,Significant (FDR-adjusted),0.073,0.232,1.165,1.076,1.261,16.492,**,CogDrisk
+LIBRA2,ptau217_ab42_ratio_log,risk_score_libra2,0.163,0.041,3.976,0,0.001115970446057728,Significant (FDR-adjusted),0.083,0.244,1.177,1.086,1.276,17.738,**,LIBRA2
+CogDrisk_cont,ptau217_ab42_ratio_log,score_cogd_z,0.044,0.033,1.355,0.177,0.2864377257908958,Not significant,-0.02,0.108,1.045,0.98,1.114,4.525,,CogDrisk
+LIBRA2_cont,ptau217_ab42_ratio_log,score_libra2_z,0,0.033,0.002,0.998,0.9981327026012758,Not significant,-0.065,0.065,1,0.937,1.067,0.008,,LIBRA2
+CogDrisk_cont,ptau217_log,GRS,-0.02,0.08,-0.25,0.802,0.8754266967142378,Not significant,-0.178,0.137,0.98,0.837,1.147,-1.993,,CogDrisk
+LIBRA2_cont,ptau217_log,GRS,-0.006,0.079,-0.082,0.935,0.9701126414644626,Not significant,-0.161,0.148,0.994,0.851,1.16,-0.648,,LIBRA2
+CogDrisk_cont,ptau217_log,apoe_burden,0.302,0.059,5.071,0,1.383889887498702e-5,Significant (FDR-adjusted),0.185,0.418,1.352,1.203,1.519,35.203,***,CogDrisk
+LIBRA2_cont,ptau217_log,apoe_burden,0.327,0.059,5.509,0,5.311692212951298e-6,Significant (FDR-adjusted),0.21,0.443,1.386,1.234,1.557,38.617,***,LIBRA2
+LIBRA2_cont,ptau217_log,fhx_burden,0.1,0.071,1.418,0.157,0.2698052083282849,Not significant,-0.038,0.239,1.105,0.962,1.27,10.538,,LIBRA2
+CogDrisk_cont,ptau217_log,fhx_burden,0.118,0.072,1.648,0.101,0.19148332512555577,Not significant,-0.022,0.259,1.126,0.978,1.296,12.562,,CogDrisk
+CogDrisk,ptau217_log,risk_score_cogd,0.136,0.036,3.802,0,0.0015355859175352673,Significant (FDR-adjusted),0.066,0.207,1.146,1.068,1.23,14.621,**,CogDrisk
+LIBRA2,ptau217_log,risk_score_libra2,0.137,0.036,3.821,0,0.0015355859175352673,Significant (FDR-adjusted),0.067,0.208,1.147,1.069,1.231,14.724,**,LIBRA2
+CogDrisk_cont,ptau217_log,score_cogd_z,0.083,0.029,2.875,0.004,0.017532565665492866,Significant (FDR-adjusted),0.027,0.14,1.087,1.027,1.15,8.686,*,CogDrisk
+LIBRA2_cont,ptau217_log,score_libra2_z,0.025,0.029,0.855,0.393,0.5620797459794779,Not significant,-0.032,0.081,1.025,0.969,1.085,2.498,,LIBRA2

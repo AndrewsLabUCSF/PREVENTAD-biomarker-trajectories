@@ -437,7 +437,7 @@ multivar_combined <- bind_rows(multivar_wide, covariate_header) %>%
 multivar_gt <- multivar_combined %>%
   gt(groupname_col = "biomarker") %>%
   tab_header(
-    title    = md("**Table 2.** Cross-Sectional Associations between Composite Risk Burden and Plasma Biomarkers"),
+    title    = md("**Table 2.** Multivariable Associations between Composite Risk Burden and Plasma Biomarkers"),
     subtitle = md(glue("Linear regression; N = {nrow(risk_dat)}. Clinical risk scores z-scored (\u03b2 per SD)."))
   ) %>%
   tab_spanner(
@@ -502,7 +502,7 @@ multivar_gt <- multivar_combined %>%
 
 multivar_gt
 
-# gtsave(multivar_gt, filename = file.path(AIM1_OUTPUT_PATH$tables, "table2_multivar_assoc.docx"))
+gtsave(multivar_gt, filename = file.path(AIM1_OUTPUT_PATH$tables, "s_table2s_multivar_assoc.docx"))
 ```
 
 ### Cross-sectional associations
