@@ -182,22 +182,35 @@ risk_preventad <- expand_grid(
 ```
 
 ```{r regression-results}
+# Shared outcome labels used by all downstream plot and table chunks
+outcome_labels <- c(
+  ab_ratio               = "Aβ42/40",
+  gfap_log               = "GFAP (log)",
+  nfl_log                = "NfL (log)",
+  ptau181_log            = "p-tau181 (log)",
+  ptau217_log            = "p-tau217 (log)",
+  ptau217_ab42_ratio_log = "p-tau217/Aβ42 (log)"
+)
+
 res_risk_preventad <- bind_rows(select(risk_preventad, model, outcome, dataf)) %>%
   unnest(dataf) %>%
   filter(
     str_detect(term, '^risk_|^apoe_burden|^grs_|^fhx_burden|^score|^GRS$')
   ) %>%
   arrange(outcome, term, estimate) %>%
+  # FDR within each model separately so models are not pooled across one another
+  group_by(model) %>%
   mutate(
     # FDR adjustment
     p.adj = p.adjust(p.value, method="fdr"),
     
     # Significance flag
-    sig = case_when(p.adj < 0.05 ~ "Significant (FDR-adjusted)",
-                    p.value < 0.05 ~ "Significant (non-adjusted)",
-                    TRUE ~ "Not significant") %>% fct_relevel("Significant (FDR-adjusted)",
-                                                              "Significant (non-adjusted)",
-                                                              "Not significant"),
+    sig = factor(
+      case_when(p.adj < 0.05 ~ "Significant (FDR-adjusted)",
+                p.value < 0.05 ~ "Significant (non-adjusted)",
+                TRUE ~ "Not significant"),
+      levels = c("Significant (FDR-adjusted)", "Significant (non-adjusted)", "Not significant")
+    ),
     
     # Confidence intervals
     conf.low = estimate - (std.error * 1.96),
@@ -232,9 +245,10 @@ res_risk_preventad <- bind_rows(select(risk_preventad, model, outcome, dataf)) %
     # Composite score type
     composite_type = if_else(str_detect(model, "CogDrisk"), "CogDrisk", "LIBRA2")
   ) %>%
+  ungroup() %>%
   # Round numeric values
-  mutate(across(c(estimate, std.error, statistic, p.value, 
-                  conf.low, conf.high, exp_est, exp_lci, exp_uci, pct_change), 
+  mutate(across(c(estimate, std.error, statistic, p.value,
+                  conf.low, conf.high, exp_est, exp_lci, exp_uci, pct_change),
                 ~round(., digits = 3)))
 ```
 
@@ -246,15 +260,6 @@ res_risk_preventad <- bind_rows(select(risk_preventad, model, outcome, dataf)) %
 #| fig-width: 14
 #| fig-height: 9
 #| out-width: "100%"
-
-outcome_labels <- c(
-  ab_ratio               = "A\u03b242/40",
-  gfap_log               = "GFAP (log)",
-  nfl_log                = "NfL (log)",
-  ptau181_log            = "p-tau181 (log)",
-  ptau217_log            = "p-tau217 (log)",
-  ptau217_ab42_ratio_log = "p-tau217/A\u03b242 (log)"
-)
 
 # Term ordering: top to bottom in plot
 term_order <- c(
@@ -366,7 +371,6 @@ res_plot_combined
 #        width = 16, height = 10, dpi = 300)
 ```
 
-
 ```{r multivar-assoc-table}
 biomarker_order_mv <- c(
   "A\u03b242/40 ratio", "GFAP (log)", "NfL (log)",
@@ -391,10 +395,19 @@ multivar_raw <- risk_preventad %>%
     conf.high   = estimate + 1.96 * std.error,
     beta_se     = sprintf("%.3f (%.3f)", estimate, std.error),
     ci          = sprintf("[%.3f, %.3f]", conf.low, conf.high),
-    p_fmt        = if_else(p.value < 0.001, "<0.001", sprintf("%.3f", p.value)),
-    p_adj        = p.adjust(p.value, method = "fdr"),
-    p_adj_fmt    = if_else(p_adj < 0.001, "<0.001", sprintf("%.3f", p_adj)),
-    p_adj_stars  = if_else(p_adj < 0.05, "sig", ""),
+    p_fmt       = if_else(p.value < 0.001, "<0.001", sprintf("%.3f", p.value)),
+    # FDR on primary predictors only (APOE, PXS, GRS, FHx);
+    # covariates (age, sex, education) are excluded from the pool
+    p_adj = {
+      adj      <- rep(NA_real_, n())
+      idx      <- str_detect(term, "^apoe_burden|^score_cogd_z|^score_libra2_z|^GRS$|^fhx_burden")
+      adj[idx] <- p.adjust(p.value[idx], method = "fdr")
+      adj
+    },
+    p_adj_fmt   = if_else(!is.na(p_adj),
+                          if_else(p_adj < 0.001, "<0.001", sprintf("%.3f", p_adj)),
+                          "—"),
+    p_adj_stars = if_else(!is.na(p_adj) & p_adj < 0.05, "sig", ""),
     stars       = case_when(
       p.value < 0.001 ~ "***",
       p.value < 0.01  ~ "**",
@@ -473,11 +486,11 @@ multivar_gt <- multivar_combined %>%
     CogDrisk_beta_se   = md("**\u03b2 (SE)**"),
     CogDrisk_ci        = md("**95% CI**"),
     CogDrisk_p_fmt     = md("**p**"),
-    CogDrisk_p_adj_fmt = md("**p.adj**"),
+    CogDrisk_p_adj_fmt = md("**q**"),
     LIBRA2_beta_se     = md("**\u03b2 (SE)**"),
     LIBRA2_ci          = md("**95% CI**"),
     LIBRA2_p_fmt       = md("**p**"),
-    LIBRA2_p_adj_fmt   = md("**p.adj**")
+    LIBRA2_p_adj_fmt   = md("**q**")
   ) %>%
   cols_hide(columns = c(CogDrisk_stars, CogDrisk_p_adj_stars, LIBRA2_stars, LIBRA2_p_adj_stars)) %>%
   tab_style(
@@ -528,7 +541,7 @@ multivar_gt <- multivar_combined %>%
     )
   ) %>%
   tab_footnote(
-    footnote  = md("p: unadjusted; p (FDR): Benjamini-Hochberg FDR-adjusted. CogDrisk model: biomarker ~ APOE \u03b54 + CogDrisk score (z) + PRS + FHx. LIBRA2 model: same risk predictors using LIBRA2 score (z), additionally adjusted for age, sex, and education. Light green: p<0.05; dark green: p(FDR)<0.05. \u2014 = not applicable. Abbreviations: "),
+    footnote  = md("p: unadjusted; q: Benjamini-Hochberg FDR-adjusted. CogDrisk model: biomarker ~ APOE \u03b54 + CogDrisk score (z) + PRS + FHx. LIBRA2 model: same risk predictors using LIBRA2 score (z), additionally adjusted for age, sex, and education. Light green: p<0.05; dark green: q<0.05. \u2014 = not applicable. Abbreviations: "),
     locations = cells_column_spanners()
   ) %>%
   cols_align(align = "left",   columns = term_label) %>%
@@ -662,22 +675,27 @@ p_xsect <- ggplot() +
   facet_wrap(~outcome_label, scales = "free_y", ncol = 3) +
   labs(
     x       = "Composite Risk Score",
-    y       = "Biomarker Level",
-    title   = "Figure 2. Predicted Biomarker Levels by Composite Risk Score"
+    y       = "Biomarker Level"#,
+    #title   = "Figure 2. Predicted Biomarker Levels by Composite Risk Score"
   ) +
   theme_bw(base_size = 12) +
   theme(
+    axis.title.y = element_blank(),
+    axis.text.y    = element_text(size = 14),
+    axis.text.x    = element_text(size = 12),
+    axis.title     = element_text(size = 15, face = "bold"),
+    #plot.title     = element_text(size = 15, hjust = 0.5, face = "bold"),
+    #plot.caption   = element_text(size = 9, hjust = 0, lineheight = 1.2,
+    #                              margin = margin(t = 10)),
     strip.background = element_rect(fill = "grey90"),
-    strip.text       = element_text(face = "bold", size = 11),
-    plot.title       = element_text(face = "bold", size = 15, hjust = 0.5),
-    legend.position  = "bottom",
-    legend.title     = element_text(size = 10, face = "bold"),
-    legend.text      = element_text(size = 9),
-    panel.grid.minor = element_blank()
+    strip.text     = element_text(face = "bold", size = 14),
+    legend.position = "bottom",
+    legend.title   = element_text(size = 14, face = "bold"),
+    legend.text    = element_text(size = 12)
   )
 
 p_xsect
-# ggsave(file.path(AIM1_OUTPUT_PATH$figures, "fig2_xsectional.png"),
+# ggsave(file.path(AIM1_OUTPUT_PATH$figures, "fig3_xsectional.png"),
 #        p_xsect,
 #        width = 16, height = 10, dpi = 300)
 ```
@@ -706,10 +724,19 @@ xsect_raw <- risk_preventad %>%
     conf.high   = estimate + 1.96 * std.error,
     beta_se     = sprintf("%.3f (%.3f)", estimate, std.error),
     ci          = sprintf("[%.3f, %.3f]", conf.low, conf.high),
-    p_fmt        = if_else(p.value < 0.001, "<0.001", sprintf("%.3f", p.value)),
-    p_adj        = p.adjust(p.value, method = "fdr"),
-    p_adj_fmt    = if_else(p_adj < 0.001, "<0.001", sprintf("%.3f", p_adj)),
-    p_adj_stars  = if_else(p_adj < 0.05, "sig", ""),
+    p_fmt       = if_else(p.value < 0.001, "<0.001", sprintf("%.3f", p.value)),
+    # FDR: 12 tests (6 biomarkers × 2 models) on the composite risk score only;
+    # covariates (age, sex, education in the LIBRA2 model) excluded from pool
+    p_adj = {
+      adj      <- rep(NA_real_, n())
+      idx      <- str_detect(term, "^risk_score")
+      adj[idx] <- p.adjust(p.value[idx], method = "fdr")
+      adj
+    },
+    p_adj_fmt   = if_else(!is.na(p_adj),
+                          if_else(p_adj < 0.001, "<0.001", sprintf("%.3f", p_adj)),
+                          "—"),
+    p_adj_stars = if_else(!is.na(p_adj) & p_adj < 0.05, "sig", ""),
     stars       = case_when(
       p.value < 0.001 ~ "***",
       p.value < 0.01  ~ "**",
@@ -785,11 +812,11 @@ xsect_gt <- xsect_combined %>%
     CogDrisk_beta_se   = md("**\u03b2 (SE)**"),
     CogDrisk_ci        = md("**95% CI**"),
     CogDrisk_p_fmt     = md("**p**"),
-    CogDrisk_p_adj_fmt = md("**p (FDR)**"),
+    CogDrisk_p_adj_fmt = md("**q**"),
     LIBRA2_beta_se     = md("**\u03b2 (SE)**"),
     LIBRA2_ci          = md("**95% CI**"),
     LIBRA2_p_fmt       = md("**p**"),
-    LIBRA2_p_adj_fmt   = md("**p (FDR)**")
+    LIBRA2_p_adj_fmt   = md("**q**")
   ) %>%
   cols_hide(columns = c(CogDrisk_stars, CogDrisk_p_adj_stars, LIBRA2_stars, LIBRA2_p_adj_stars)) %>%
   tab_style(
@@ -840,7 +867,7 @@ xsect_gt <- xsect_combined %>%
     )
   ) %>%
   tab_footnote(
-    footnote  = md("p: unadjusted; p (FDR): Benjamini-Hochberg FDR-adjusted. CogDrisk model: biomarker ~ composite risk score (no additional covariates). LIBRA2 model: biomarker ~ composite risk score + age + sex + education. Light green: p<0.05; dark green: p(FDR)<0.05. \u2014 = not applicable."),
+    footnote  = md("p: unadjusted; q: Benjamini-Hochberg FDR-adjusted. CogDrisk model: biomarker ~ composite risk score (no additional covariates). LIBRA2 model: biomarker ~ composite risk score + age + sex + education. Light green: p<0.05; dark green: q<0.05. \u2014 = not applicable."),
     locations = cells_column_spanners()
   ) %>%
   cols_align(align = "left",   columns = term_label) %>%

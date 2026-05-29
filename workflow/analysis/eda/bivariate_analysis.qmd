@@ -578,3 +578,101 @@ res_plot
 # Save plot
 # ggsave(file.path(AIM1_OUTPUT_PATH$figures, "PREVENTAD_LIBRA2factors_vs_BBM.png"), res_plot, width = 14, height = 14, dpi = 300)
 ```
+
+## Upset plot
+
+```{r upset-plot}
+#| fig-width: 12
+#| fig-height: 7
+
+library(UpSetR)
+
+# ── 1. Setup ────────────────────────────────────────────────────────────────────
+baseline_dat  <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_baseline.rds"))
+mci_dat_u     <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_MCI.rds"))
+raw_dat       <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_raw.rds"))
+
+mci_ids      <- mci_dat_u %>% distinct(CONP_ID) %>% pull(CONP_ID)
+dementia_ids <- raw_dat$diagnosis %>%
+  filter(Clinical_diagnosis == "Dementia",
+         CONP_ID %in% baseline_dat$CONP_ID) %>%
+  distinct(CONP_ID) %>% pull(CONP_ID)
+
+# ── 2. Build binary indicator matrix ────────────────────────────────────────────
+# UpSetR needs integer 0/1 columns; keep CONP_ID for element queries.
+# Column names become the axis labels, so use display-friendly names directly.
+upset_base <- baseline_dat %>%
+  mutate(
+    mci_status            = factor(case_when(
+      CONP_ID %in% dementia_ids ~ "Progressed to Dementia",
+      CONP_ID %in% mci_ids      ~ "Progressed to MCI",
+      TRUE                       ~ "Remained CU"
+    ), levels = c("Remained CU", "Progressed to MCI", "Progressed to Dementia")),
+    `Family History`      = as.integer(!is.na(fhx_burden)     & fhx_burden == 1),
+    `APOE e4+`            = as.integer(!is.na(apoe_burden)     & apoe_burden == 1),
+    `PRS (top quartile)`  = as.integer(!is.na(grs_burden)      & grs_burden == 1),
+    `CogDrisk (>1 SD)`    = as.integer(!is.na(cogdrisk_burden) & cogdrisk_burden == 1),
+    `LIBRA2 (>1 SD)`      = as.integer(!is.na(libra2_burden)   & libra2_burden == 1)
+  ) %>%
+  select(CONP_ID, mci_status,
+         `Family History`, `APOE e4+`, `PRS (top quartile)`,
+         `CogDrisk (>1 SD)`, `LIBRA2 (>1 SD)`)
+
+set_cols <- c("Family History", "APOE e4+", "PRS (top quartile)",
+              "CogDrisk (>1 SD)", "LIBRA2 (>1 SD)")
+
+upset_input <- as.data.frame(upset_base) %>%
+  mutate(CONP_ID = as.character(CONP_ID))
+
+# ── 3. Element IDs for MCI-status queries ───────────────────────────────────────
+mci_ids_v <- upset_base %>%
+  filter(mci_status == "Progressed to MCI") %>%
+  pull(CONP_ID) %>% as.character()
+
+dem_ids_v <- upset_base %>%
+  filter(mci_status == "Progressed to Dementia") %>%
+  pull(CONP_ID) %>% as.character()
+
+# ── 4. Plot ─────────────────────────────────────────────────────────────────────
+# main.bar.color fills the full bar in CU blue; MCI and Dementia element queries
+# overlay from the bottom upward, leaving the CU remainder at the top — no grey.
+# Arguments stored in a list so do.call() can reuse them for both display and save.
+upset_args <- list(
+  data             = upset_input,
+  sets             = set_cols,
+  nintersects      = 20,
+  order.by         = "freq",
+  keep.order       = FALSE,
+  main.bar.color   = "#4575B4",
+  mainbar.y.label  = "Intersection Size",
+  sets.x.label     = "Set Size",
+  # text.scale: c(intersection title, intersection ticks, set title, set ticks,
+  #               set names, intersection count numbers)
+  text.scale       = c(1.2, 1.0, 1.1, 1.0, 1.1, 0.9),
+  point.size       = 4,
+  line.size        = 2,
+  mb.ratio         = c(0.65, 0.35),
+  # MCI drawn first (0→n_mci), Dementia on top (0→n_dem, smaller so not overwritten)
+  # → bottom: red (Dementia), middle: orange (MCI), top: blue (CU via main.bar.color)
+  queries          = list(
+    list(query      = elements,
+         params     = list("CONP_ID", mci_ids_v),
+         color      = "#FD9209",
+         active     = TRUE,
+         query.name = "Progressed to MCI"),
+    list(query      = elements,
+         params     = list("CONP_ID", dem_ids_v),
+         color      = "#D73027",
+         active     = TRUE,
+         query.name = "Progressed to Dementia")
+  ),
+  query.legend     = "top"
+)
+
+do.call(upset, upset_args)
+
+png(file.path(EDA_OUTPUT_PATH$figures, "fig1_upsetplot.png"),
+    width = 12, height = 7, units = "in", res = 300)
+do.call(upset, upset_args)
+dev.off()
+```
