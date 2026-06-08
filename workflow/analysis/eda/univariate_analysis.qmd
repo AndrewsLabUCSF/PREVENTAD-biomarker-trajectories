@@ -24,14 +24,21 @@ library(patchwork)
 
 source('workflow/scripts/config.R')
 
+excluding_ids <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_missingcrs.rds"))
+
 biomarkers <- readRDS(file.path(DATA_INTERMEDIATE_PATH, 
-                                "PREVENTAD_biomarkers.rds"))
-predictors <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_predictors.rds"))
-baseline_dat <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_baseline.rds"))
+                                "PREVENTAD_biomarkers.rds")) %>% 
+  filter(!CONP_ID %in% excluding_ids)
+predictors <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_predictors.rds")) %>% 
+  filter(!CONP_ID %in% excluding_ids)
+baseline_dat <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_baseline.rds")) 
 lastvisit_dat <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_lastvisit.rds"))
 all_dat <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_longitudinal.rds"))
 
-GRS <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_GRS.rds"))
+GRS <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_GRS.rds")) %>% 
+  filter(!CONP_ID %in% excluding_ids)
+
+
 ```
 
 ## Overview
@@ -68,7 +75,7 @@ ggsave(
 grs_plot <- GRS %>%
   ggplot(aes(x = GRS)) +
   geom_density(col="red") +
-  labs(x = "GRS",
+  labs(x = "PRS",
        y = "Density")
 grs_plot
 
@@ -82,7 +89,7 @@ ggsave(
 
 ```{r fhx}
 fhx_hist <- predictors %>%
-  ggplot(aes(x=family_history, fill=family_history)) +
+  ggplot(aes(x=FDR_AD, fill=as.factor(FDR_AD))) +
   geom_bar(stat="count", alpha=0.7) + 
   geom_text(
     stat = "count",  
@@ -91,10 +98,15 @@ fhx_hist <- predictors %>%
     hjust = 0.5,   
     size = 3.5     
   ) +
-  labs(x = "Family History",
+  labs(x = "# of First-Degree Relatives with AD",
        y = "Count") + 
   theme(legend.position="none")
 fhx_hist
+
+ggsave(
+  file.path(EDA_OUTPUT_PATH$figures, "FHx_plot.png"),
+  fhx_hist, width = 14, height = 10, dpi = 300
+)
 ```
 
 ### CogDrisk
@@ -108,6 +120,11 @@ cogd_plot <- predictors %>%
        y = "Density")
 cogd_plot
 print(summary(predictors$score_cogd))
+
+ggsave(
+  file.path(EDA_OUTPUT_PATH$figures, "CogD_plot.png"),
+  cogd_plot, width = 14, height = 10, dpi = 300
+)
 ```
 
 ### LIBRA2
@@ -121,6 +138,11 @@ libra2_plot <- predictors %>%
        y = "Density")
 libra2_plot
 print(summary(predictors$score_libra2))
+
+ggsave(
+  file.path(EDA_OUTPUT_PATH$figures, "libra2_plot.png"),
+  libra2_plot, width = 14, height = 10, dpi = 300
+)
 ```
 
 ```{r}

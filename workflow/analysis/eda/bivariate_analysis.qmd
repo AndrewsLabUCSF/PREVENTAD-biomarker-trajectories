@@ -582,10 +582,13 @@ res_plot
 ## Upset plot
 
 ```{r upset-plot}
-#| fig-width: 12
+#| fig-width: 20
 #| fig-height: 7
 
 library(UpSetR)
+library(png)
+library(grid)
+library(gridExtra)
 
 # ── 1. Setup ────────────────────────────────────────────────────────────────────
 baseline_dat  <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_baseline.rds"))
@@ -618,8 +621,10 @@ upset_base <- baseline_dat %>%
          `Family History`, `APOE e4+`, `PRS (top quartile)`,
          `CogDrisk (>1 SD)`, `LIBRA2 (>1 SD)`)
 
-set_cols <- c("Family History", "APOE e4+", "PRS (top quartile)",
-              "CogDrisk (>1 SD)", "LIBRA2 (>1 SD)")
+# Sets for each panel — order is bottom→top in the matrix, so clinical score goes
+# first (bottom) and APOE last (top) to match the requested display order.
+set_cols_cogd  <- c("CogDrisk (>1 SD)", "Family History", "PRS (top quartile)", "APOE e4+")
+set_cols_libra2 <- c("LIBRA2 (>1 SD)",  "Family History", "PRS (top quartile)", "APOE e4+")
 
 upset_input <- as.data.frame(upset_base) %>%
   mutate(CONP_ID = as.character(CONP_ID))
@@ -633,27 +638,21 @@ dem_ids_v <- upset_base %>%
   filter(mci_status == "Progressed to Dementia") %>%
   pull(CONP_ID) %>% as.character()
 
-# ── 4. Plot ─────────────────────────────────────────────────────────────────────
-# main.bar.color fills the full bar in CU blue; MCI and Dementia element queries
-# overlay from the bottom upward, leaving the CU remainder at the top — no grey.
-# Arguments stored in a list so do.call() can reuse them for both display and save.
-upset_args <- list(
+# ── 4. Shared upset arguments ────────────────────────────────────────────────────
+common_args <- list(
   data             = upset_input,
-  sets             = set_cols,
   nintersects      = 20,
   order.by         = "freq",
-  keep.order       = FALSE,
+  keep.order       = TRUE,
   main.bar.color   = "#4575B4",
   mainbar.y.label  = "Intersection Size",
   sets.x.label     = "Set Size",
-  # text.scale: c(intersection title, intersection ticks, set title, set ticks,
-  #               set names, intersection count numbers)
-  text.scale       = c(1.2, 1.0, 1.1, 1.0, 1.1, 0.9),
+  # Single scalar applies uniformly to all text including the query legend.
+  # (The 6-element vector form only controls specific axes and misses the legend.)
+  text.scale       = 2,
   point.size       = 4,
   line.size        = 2,
   mb.ratio         = c(0.65, 0.35),
-  # MCI drawn first (0→n_mci), Dementia on top (0→n_dem, smaller so not overwritten)
-  # → bottom: red (Dementia), middle: orange (MCI), top: blue (CU via main.bar.color)
   queries          = list(
     list(query      = elements,
          params     = list("CONP_ID", mci_ids_v),
@@ -669,10 +668,44 @@ upset_args <- list(
   query.legend     = "top"
 )
 
-do.call(upset, upset_args)
+# ── 5. Render each panel to a temp PNG ──────────────────────────────────────────
+# as_grob() / grid.grabExpr() don't capture UpSetR's internal grid output reliably.
+# Rendering to temp files then reading back as rasterGrobs is the safe alternative.
+tmp_cogd  <- tempfile(fileext = ".png")
+tmp_libra2 <- tempfile(fileext = ".png")
 
+png(tmp_cogd,  width = 10, height = 7, units = "in", res = 150)
+do.call(upset, c(common_args, list(sets = set_cols_cogd)))
+dev.off()
+
+png(tmp_libra2, width = 10, height = 7, units = "in", res = 150)
+do.call(upset, c(common_args, list(sets = set_cols_libra2)))
+dev.off()
+
+# ── 6. Read back as rasterGrobs, label, and arrange side by side ─────────────────
+img_cogd  <- rasterGrob(readPNG(tmp_cogd),  interpolate = TRUE)
+img_libra2 <- rasterGrob(readPNG(tmp_libra2), interpolate = TRUE)
+
+make_panel <- function(img, label) {
+  arrangeGrob(
+    textGrob(label, hjust = 0, x = 0.01,
+             gp = gpar(fontsize = 13, fontface = "bold")),
+    img,
+    nrow = 2, heights = c(0.04, 0.96)
+  )
+}
+
+p_combined <- arrangeGrob(
+  make_panel(img_cogd,  "CogDrisk"),
+  make_panel(img_libra2, "LIBRA2"),
+  ncol = 2
+)
+
+grid.draw(p_combined)
+
+# Save
 png(file.path(EDA_OUTPUT_PATH$figures, "fig1_upsetplot.png"),
-    width = 12, height = 7, units = "in", res = 300)
-do.call(upset, upset_args)
+    width = 20, height = 7, units = "in", res = 300)
+grid.draw(p_combined)
 dev.off()
 ```

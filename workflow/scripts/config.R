@@ -1,4 +1,7 @@
 
+source(here::here("workflow", "scripts", "shared_vars.R"))
+
+
 # LOAD PACKAGES -----------------------------------------------------------
 pacman::p_load(tidyr, dplyr, ggplot2, gtsummary, gt, here, tidyverse, data.table,
                lubridate, ggpubr, jtools, lme4, forcats, glue, ggsci, lmerTest)

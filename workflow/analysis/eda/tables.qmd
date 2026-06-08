@@ -191,8 +191,8 @@ table1a_data <- baseline_dat %>%
     female    = if_else(sex == "Female", 1, 0),
     caucasian = if_else(Ethnicity == "Caucasian", 1, 0),
     mci_prog_status = factor(
-      if_else(CONP_ID %in% mci_ids, "Progressed to MCI", "Remained CU"),
-      levels = c("Remained CU", "Progressed to MCI")
+      if_else(CONP_ID %in% mci_ids, "MCI or Dementia", "Remained CU"),
+      levels = c("Remained CU", "MCI or Dementia")
     )
   ) %>%
   select(
@@ -253,11 +253,11 @@ table1a_gtsummary <- table1a_data %>%
     ~.x %>%
       mutate(
         grouping = case_when(
-          variable %in% c("age", "female", "educ", "caucasian")            ~ "Demographics",
+          variable %in% c("age", "female", "educ", "caucasian") ~ "Demographics",
           variable %in% c("apoe_burden", "fhx_burden", "grs_burden",
-                          "cogdrisk_burden", "libra2_burden")              ~ "AD risk indicators",
+                          "cogdrisk_burden", "libra2_burden") ~ "AD risk indicators",
           variable %in% c("ab_ratio", "gfap", "nfl", "ptau181",
-                          "ptau217", "ptau217_ab42_ratio")                 ~ "Baseline biomarkers",
+                          "ptau217", "ptau217_ab42_ratio") ~ "Baseline biomarkers",
           TRUE ~ NA_character_
         )
       )

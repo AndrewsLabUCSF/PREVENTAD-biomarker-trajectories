@@ -37,15 +37,7 @@ cat("Time range:", min(all_nomci_dat$years, na.rm = TRUE), "to",
 ```
 
 ```{r define-vars}
-# Outcome labels (defined here for use across growth-model plots)
-outcome_labels <- c(
-  ab_ratio               = "A\u03b242/40",
-  gfap_log               = "GFAP",
-  nfl_log                = "NfL",
-  ptau181_log            = "ptau-181",
-  ptau217_log            = "ptau-217",
-  ptau217_ab42_ratio_log = "ptau-217/A\u03b242 ratio"
-)
+outcome_labels <- OUTCOME_LABELS
 
 # subjects with 3+ ptau217 observations (with all covariates)
 ptau217_subjects <- all_nomci_dat %>%
@@ -60,6 +52,8 @@ ptau217_subjects <- all_nomci_dat %>%
 ## Biomarker unconditional growth models
 
 ```{r growth-models}
+sparse_outcomes <- SPARSE_OUTCOMES
+
 # Unconditional growth: compare linear, ns(df=2), ns(df=3)
 # Fit all three specifications per biomarker to inform choice of time term.
 uncond_specs <- tribble(
@@ -167,7 +161,7 @@ p_uncond <- ggplot() +
              alpha = 0.12, size = 0.6, color = "grey50") +
   geom_line(data = spline_preds,
             aes(x = years, y = pred),
-            color = "#DF8F44FF", linewidth = 1.1) +
+            color = COLOR_LIBRA2, linewidth = 1.1) +
   scale_x_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.03))) +
   facet_wrap(~outcome_label, scales = "free", ncol = 3) +
   labs(
@@ -193,49 +187,7 @@ print(p_uncond)
 
 ## LME Models
 
-### Model 1: Main effect
-
-These models test whether composite risk score (0-4 scale) predicts biomarker levels in a dose-response manner. The beta coefficient represents the change in biomarker level for each 1-unit increase in risk score (e.g., going from 2 to 3 risk factors). LIBRA2 models are adjusted for age, sex, and education.
-
-```{r main-models}
-models_main <- tribble(
-  ~model, ~predictors,
-  "CogDrisk_main", "years_centered + risk_score_cogd + (1 + years_centered | CONP_ID)",
-  "LIBRA2_main", "years_centered + baseline_age + sex + educ + risk_score_libra2 + (1 + years_centered | CONP_ID)"
-)
-
-models_main_sparse <- tribble(
-  ~model, ~predictors,
-  "CogDrisk_main", "years_centered + risk_score_cogd + (1 | CONP_ID)",
-  "LIBRA2_main",   "years_centered + baseline_age + sex + educ + risk_score_libra2 + (1 | CONP_ID)"
-)
-
-lme_main <- bind_rows(
-  # all other outcomes — full random slopes, full data
-  expand_grid(
-    outcome = setdiff(BIOMARKERS_TRANS, "ptau217_ab42_ratio_log"),
-    models_main
-  ),
-  # ptau217_ab42 — intercept only, full data
-  expand_grid(
-    outcome = "ptau217_ab42_ratio_log",
-    models_main_sparse
-  )
-) %>%
-  mutate(
-    dat = map(outcome, ~case_when(
-      . == "ptau217_log"      ~ list(filter(all_nomci_dat, CONP_ID %in% ptau217_subjects)),
-      . == "ptau217_ab42_ratio_log" ~ list(all_nomci_dat),
-      TRUE                ~ list(all_nomci_dat)
-    ) %>% pluck(1)),
-    eq    = glue("{outcome} ~ {predictors}"),
-    res   = map2(eq, dat, ~lmer(as.formula(.x), data = .y)),
-    dataf = map(res, ~tidy(., conf.int = TRUE)),
-    mod   = map(res, glance)
-  )
-```
-
-### Model 2: Time interactions (risk score × time)
+### Time interactions (risk score × time)
 
 These models test whether the rate of biomarker change over time differs by risk score level and other covariates. The interaction term (years_centered:risk_score) shows how much faster (or slower) biomarkers change for each additional risk factor. For LIBRA2, interactions between time and demographic covariates (baseline_age, sex, educ) are also included. 
 
@@ -253,12 +205,12 @@ models_time_interact_sparse <- tribble(
 )
 
 lme_time_interact <- bind_rows(
-  # all other outcomes — full random slopes, full data
+  # all other outcomes: full random slopes, full data
   expand_grid(
     outcome = setdiff(BIOMARKERS_TRANS, "ptau217_ab42_ratio_log"),
     models_time_interact
   ),
-  # ptau217_ab42 — intercept only, full data
+  # ptau217_ab42: intercept only, full data
   expand_grid(
     outcome = "ptau217_ab42_ratio_log",
     models_time_interact_sparse
@@ -271,13 +223,14 @@ lme_time_interact <- bind_rows(
       TRUE                ~ list(all_nomci_dat)
     ) %>% pluck(1)),
     eq    = glue("{outcome} ~ {predictors}"),
-    res   = map2(eq, dat, ~lmer(as.formula(.x), data = .y)),
+    res   = map2(eq, dat, ~lmer(as.formula(.x), data = .y,
+                                control = lmerControl(optimizer = "bobyqa"))),
     dataf = map(res, ~tidy(., conf.int = TRUE)),
     mod   = map(res, glance)
   )
 ```
 
-### Model 3: Multivariable
+### Multivariable LME
 
 These models decompose the composite risk score into its constituent predictors: APOE ε4 burden, z-scored composite risk score (PXS), polygenic risk score (GRS), and family history burden (FHx). The time interaction model tests whether individual risk factors modify the rate of biomarker change over time.
 
@@ -305,7 +258,8 @@ lme_multivar_interact <- bind_rows(
       TRUE ~ list(all_nomci_dat)
     ) %>% pluck(1)),
     eq    = glue("{outcome} ~ {predictors}"),
-    res   = map2(eq, dat, ~lmer(as.formula(.x), data = .y)),
+    res   = map2(eq, dat, ~lmer(as.formula(.x), data = .y,
+                                control = lmerControl(optimizer = "bobyqa"))),
     dataf = map(res, ~tidy(., conf.int = TRUE)),
     mod   = map(res, glance)
   )
@@ -314,33 +268,31 @@ lme_multivar_interact <- bind_rows(
 ## LME results
 
 ```{r lme-results}
-# Combine all LME results
-lme_results <- bind_rows(
-  lme_main %>%
-    select(model, outcome, dataf) %>%
-    mutate(model_type = "Main Effect"),
-  lme_time_interact %>%
-    select(model, outcome, dataf) %>%
-    mutate(model_type = "Time Interaction")
-) %>%
+# Time interaction model results
+lme_results <- lme_time_interact %>%
+  select(model, outcome, dataf) %>%
   unnest(dataf) %>%
   filter(str_detect(term, "^risk_score|^years_centered:risk_score")) %>%
-  # FDR family = 12 per section (6 biomarkers × 2 models); group by both
-  # model_type and term type so the level effect and interaction term from the
-  # interaction model are corrected in separate families of 12, not pooled
-  group_by(model_type, is_interaction = str_detect(term, ":")) %>%
+  # Hochberg correction: 2 families of 12 tests each (6 biomarkers × 2 models)
+  #   Family 1: risk score level effect (no colon)
+  #   Family 2: time × risk score interaction (colon term)
+  mutate(adj_family = if_else(str_detect(term, ":"), "interaction", "level")) %>%
+  group_by(adj_family) %>%
   mutate(
     # Confidence intervals
     conf.low = estimate - (std.error * 1.96),
     conf.high = estimate + (std.error * 1.96),
 
-    # Significance — 12 tests per section
-    p_adj       = p.adjust(p.value, method = "fdr"),
-    sig = case_when(
-      p_adj < 0.05   ~ "Significant (FDR-adjusted)",
-      p.value < 0.05 ~ "Significant (non-adjusted)",
-      TRUE           ~ "Not significant"
-    ) %>% fct_relevel("Significant (FDR-adjusted)", "Significant (non-adjusted)", "Not significant"),
+    # Hochberg correction — 12 tests per family
+    p_adj = p.adjust(p.value, method = "hochberg"),
+    sig = factor(
+      case_when(
+        p_adj < 0.05   ~ "Significant (Hochberg-adjusted)",
+        p.value < 0.05 ~ "Significant (non-adjusted)",
+        TRUE           ~ "Not significant"
+      ),
+      levels = c("Significant (Hochberg-adjusted)", "Significant (non-adjusted)", "Not significant")
+    ),
     stars = case_when(
       p.value >= 0.05 ~ "",
       p.value >= 0.01 & p.value < 0.05 ~ "*",
@@ -374,239 +326,40 @@ lme_results <- bind_rows(
     risk_type = if_else(str_detect(model, "CogDrisk"), "CogDrisk", "LIBRA2")
   ) %>%
   ungroup() %>%
+  select(-adj_family) %>%
   mutate(across(c(estimate, std.error, statistic, p.value,
                   conf.low, conf.high, exp_est, exp_lci, exp_uci, pct_change_per_unit),
                 ~round(., digits = 3)))
 ```
 
-### Main effect results
-
-```{r main-models-plot}
-#| fig-width: 10
-#| fig-height: 6
-
-plot_data_main <- lme_results %>%
-  filter(str_detect(model, "main")) %>%
-  mutate(
-    sig        = factor(sig, levels = c(TRUE, FALSE)),
-    risk_type  = factor(risk_type, levels = c("LIBRA2", "CogDrisk")),
-    outcome_label = case_when(
-      outcome == "ab_ratio"               ~ "A\u03b242/40",
-      outcome == "gfap_log"               ~ "GFAP (log)",
-      outcome == "nfl_log"                ~ "NfL (log)",
-      outcome == "ptau181_log"            ~ "p-tau181 (log)",
-      outcome == "ptau217_log"            ~ "p-tau217 (log)",
-      outcome == "ptau217_ab42_ratio_log" ~ "p-tau217/A\u03b242 (log)",
-      TRUE ~ outcome
-    ),
-    outcome_label = factor(outcome_label, levels = rev(c(
-      "A\u03b242/40", "GFAP (log)", "NfL (log)",
-      "p-tau181 (log)", "p-tau217 (log)", "p-tau217/A\u03b242 (log)"
-    )))
-  )
-
-p_main_combined <- ggplot(plot_data_main,
-  aes(x = estimate, y = outcome_label,
-      xmin = conf.low, xmax = conf.high,
-      color = risk_type, alpha = sig,
-      group = risk_type)
-) +
-  geom_point(size = 3, position = position_dodge(width = 0.6)) +
-  geom_errorbarh(linewidth = 0.8, position = position_dodge(width = 0.6), height = 0.3) +
-  geom_vline(xintercept = 0, linetype = 2, color = "grey40") +
-  scale_alpha_manual(
-    values = c(`FALSE` = 0.25, `TRUE` = 1),
-    labels = c(`FALSE` = "Not Significant", `TRUE` = "Significant"),
-    name = "Significance"
-  ) +
-  scale_color_manual(
-    values = c("CogDrisk" = "#374E55FF", "LIBRA2" = "#DF8F44FF"),
-    breaks = c("CogDrisk", "LIBRA2"),
-    name = "Model"
-  ) +
-  labs(
-    x     = "Beta (95% CI)",
-    y     = NULL,
-    title = "Figure 3. Baseline Association with Risk Score"
-  ) +
-  theme_bw(base_size = 13) +
-  theme(
-    legend.position  = "bottom",
-    legend.title     = element_text(size = 10, face = "bold"),
-    legend.text      = element_text(size = 9),
-    panel.grid.minor = element_blank(),
-    plot.title       = element_text(face = "bold", size = 14, hjust = 0.5),
-    plot.subtitle    = element_text(size = 11, hjust = 0.5, color = "grey40"),
-    axis.text        = element_text(size = 11)
-  )
-
-print(p_main_combined)
-
-# ggsave(file.path(AIM1_OUTPUT_PATH$figures, "fig3_lme_main_effects.png"),
-#        p_main_combined, width = 10, height = 6, dpi = 300)
-```
-
-```{r main-models-results}
-biomarker_order_lme <- c(
-  "A\u03b242/40", "GFAP", "NfL", "ptau-181", "ptau-217", "ptau-217/A\u03b242 ratio"
-)
-
-term_order_lme_main <- c(
-  "Composite Risk Score",
-  "Covariates",
-  "Age", "Sex (Male)", "Education (years)"
-)
-
-covariate_terms_lme <- c("Age", "Sex (Male)", "Education (years)")
-
-main_all_raw <- lme_main %>%
-  select(model, outcome, dataf) %>%
-  unnest(dataf) %>%
-  filter(effect == "fixed",
-         !term %in% c("(Intercept)", "years_centered")) %>%
-  mutate(
-    conf.low  = estimate - 1.96 * std.error,
-    conf.high = estimate + 1.96 * std.error,
-    beta_se   = sprintf("%.3f (%.3f)", estimate, std.error),
-    ci        = sprintf("[%.3f, %.3f]", conf.low, conf.high),
-    p_fmt     = if_else(p.value < 0.001, "<0.001", sprintf("%.3f", p.value)),
-    stars     = case_when(
-      p.value < 0.001 ~ "***",
-      p.value < 0.01  ~ "**",
-      p.value < 0.05  ~ "*",
-      TRUE            ~ ""
-    ),
-    model_short = if_else(str_detect(model, "CogDrisk"), "CogDrisk", "LIBRA2"),
-    biomarker   = case_when(
-      outcome == "ab_ratio"               ~ "A\u03b242/40",
-      outcome == "gfap_log"               ~ "GFAP",
-      outcome == "nfl_log"                ~ "NfL",
-      outcome == "ptau181_log"            ~ "ptau-181",
-      outcome == "ptau217_log"            ~ "ptau-217",
-      outcome == "ptau217_ab42_ratio_log" ~ "ptau-217/A\u03b242 ratio"
-    ),
-    term_label  = case_when(
-      str_detect(term, "^risk_score") ~ "Composite Risk Score",
-      term == "baseline_age"          ~ "Age",
-      term == "sexMale"               ~ "Sex (Male)",
-      term == "educ"                  ~ "Education (years)",
-      TRUE ~ term
-    )
-  )
-
-main_wide <- main_all_raw %>%
-  select(model_short, biomarker, term_label, beta_se, ci, p_fmt, stars) %>%
-  pivot_wider(
-    names_from  = model_short,
-    values_from = c(beta_se, ci, p_fmt, stars),
-    names_glue  = "{model_short}_{.value}"
-  ) %>%
-  mutate(
-    across(c(CogDrisk_beta_se, CogDrisk_ci, CogDrisk_p_fmt), ~replace_na(., "\u2014")),
-    CogDrisk_stars = replace_na(CogDrisk_stars, "")
-  )
-
-# "Covariates" separator row per biomarker
-covariate_header_lme <- main_wide %>%
-  distinct(biomarker) %>%
-  mutate(
-    term_label       = "Covariates",
-    CogDrisk_beta_se = "", CogDrisk_ci = "", CogDrisk_p_fmt = "", CogDrisk_stars = "",
-    LIBRA2_beta_se   = "", LIBRA2_ci   = "", LIBRA2_p_fmt   = "", LIBRA2_stars   = ""
-  )
-
-main_combined <- bind_rows(main_wide, covariate_header_lme) %>%
-  mutate(
-    biomarker  = factor(biomarker,  levels = biomarker_order_lme),
-    term_label = factor(term_label, levels = term_order_lme_main)
-  ) %>%
-  arrange(biomarker, term_label) %>%
-  select(biomarker, term_label,
-         CogDrisk_beta_se, CogDrisk_ci, CogDrisk_p_fmt, CogDrisk_stars,
-         LIBRA2_beta_se,   LIBRA2_ci,   LIBRA2_p_fmt,   LIBRA2_stars)
-
-main_gt <- main_combined %>%
-  gt(groupname_col = "biomarker") %>%
-  tab_header(
-    title    = md("**Table S4.** Main Effect of Composite Risk Score on Plasma Biomarker Levels"),
-    subtitle = md("Linear mixed-effects models. LIBRA2 additionally adjusted for age, sex, and education.")
-  ) %>%
-  tab_spanner(label = md("**CogDrisk**"), columns = starts_with("CogDrisk_")) %>%
-  tab_spanner(label = md("**LIBRA2**"),   columns = starts_with("LIBRA2_")) %>%
-  cols_label(
-    term_label       = md("**Predictor**"),
-    CogDrisk_beta_se = md("**\u03b2 (SE)**"),
-    CogDrisk_ci      = md("**95% CI**"),
-    CogDrisk_p_fmt   = md("**p**"),
-    CogDrisk_stars   = md(""),
-    LIBRA2_beta_se   = md("**\u03b2 (SE)**"),
-    LIBRA2_ci        = md("**95% CI**"),
-    LIBRA2_p_fmt     = md("**p**"),
-    LIBRA2_stars     = md("")
-  ) %>%
-  tab_style(
-    style     = cell_fill(color = "#e8f4e8"),
-    locations = cells_body(columns = CogDrisk_p_fmt,
-                           rows    = CogDrisk_stars %in% c("*", "**", "***"))
-  ) %>%
-  tab_style(
-    style     = cell_fill(color = "#e8f4e8"),
-    locations = cells_body(columns = LIBRA2_p_fmt,
-                           rows    = LIBRA2_stars %in% c("*", "**", "***"))
-  ) %>%
-  tab_style(
-    style     = list(cell_text(weight = "bold"), cell_fill(color = "#f8f9fa")),
-    locations = cells_row_groups()
-  ) %>%
-  tab_style(
-    style     = list(cell_text(weight = "bold", style = "italic"),
-                     cell_fill(color = "#f0f2f4")),
-    locations = cells_body(rows = term_label == "Covariates")
-  ) %>%
-  tab_style(
-    style     = cell_text(indent = px(16)),
-    locations = cells_body(
-      columns = term_label,
-      rows    = term_label %in% covariate_terms_lme
-    )
-  ) %>%
-  tab_footnote(
-    footnote  = md("*** p<0.001; ** p<0.01; * p<0.05. \u03b2 = change in biomarker per 1-unit increase in composite risk score. Highlighted cells indicate p<0.05. \u2014 = not applicable (CogDrisk not adjusted for these covariates)."),
-    locations = cells_column_spanners()
-  ) %>%
-  cols_align(align = "left",   columns = term_label) %>%
-  cols_align(align = "center", columns = c(starts_with("CogDrisk_"), starts_with("LIBRA2_"))) %>%
-  row_group_order(groups = biomarker_order_lme)
-
-main_gt
-
-# gtsave(main_gt, filename = file.path(AIM1_OUTPUT_PATH$tables, "s_table4_lme_main.docx"))
-```
-
-### Time interaction results
-
 ```{r interact-models-plot}
-#| fig-width: 10
+#| fig-width: 16
 #| fig-height: 6
+
+panel_labels <- c(
+  "level"       = "Risk score main effect",
+  "interaction" = "Time \u00d7 risk score"
+)
 
 plot_data_interact <- lme_results %>%
   filter(str_detect(model, "interact")) %>%
-  filter(str_detect(term, "years_centered:")) %>%
   mutate(
-    sig        = factor(sig, levels = c(TRUE, FALSE)),
+    term_type = if_else(!str_detect(term, ":"), "level", "interaction"),
+    term_type = factor(term_type, levels = c("level", "interaction"),
+                       labels = panel_labels),
     risk_type  = factor(risk_type, levels = c("LIBRA2", "CogDrisk")),
     outcome_label = case_when(
       outcome == "ab_ratio"               ~ "A\u03b242/40",
       outcome == "gfap_log"               ~ "GFAP (log)",
       outcome == "nfl_log"                ~ "NfL (log)",
-      outcome == "ptau181_log"            ~ "p-tau181 (log)",
-      outcome == "ptau217_log"            ~ "p-tau217 (log)",
-      outcome == "ptau217_ab42_ratio_log" ~ "p-tau217/A\u03b242 (log)",
+      outcome == "ptau181_log"            ~ "ptau181 (log)",
+      outcome == "ptau217_log"            ~ "ptau217 (log)",
+      outcome == "ptau217_ab42_ratio_log" ~ "ptau217/A\u03b242 (log)",
       TRUE ~ outcome
     ),
     outcome_label = factor(outcome_label, levels = rev(c(
       "A\u03b242/40", "GFAP (log)", "NfL (log)",
-      "p-tau181 (log)", "p-tau217 (log)", "p-tau217/A\u03b242 (log)"
+      "ptau181 (log)", "ptau217 (log)", "ptau217/A\u03b242 (log)"
     )))
   )
 
@@ -617,23 +370,33 @@ p_interact_combined <- ggplot(plot_data_interact,
       group = risk_type)
 ) +
   geom_point(size = 3, position = position_dodge(width = 0.6)) +
-  geom_errorbarh(linewidth = 0.8, position = position_dodge(width = 0.6), height = 0.3) +
+  geom_errorbarh(aes(linewidth = sig), position = position_dodge(width = 0.6), height = 0.3) +
   geom_vline(xintercept = 0, linetype = 2, color = "grey40") +
   scale_alpha_manual(
-    values = c(`FALSE` = 0.25, `TRUE` = 1),
-    labels = c(`FALSE` = "Not Significant", `TRUE` = "Significant"),
+    values = c(
+      "Significant (Hochberg-adjusted)" = 1,
+      "Significant (non-adjusted)" = 1,
+      "Not significant"            = 0.25
+    ),
+    name = "Significance"
+  ) +
+  scale_linewidth_manual(
+    values = c(
+      "Significant (Hochberg-adjusted)" = 1.5,
+      "Significant (non-adjusted)" = 0.8,
+      "Not significant"            = 0.5
+    ),
     name = "Significance"
   ) +
   scale_color_manual(
-    values = c("CogDrisk" = "#374E55FF", "LIBRA2" = "#DF8F44FF"),
+    values = MODEL_COLORS,
     breaks = c("CogDrisk", "LIBRA2"),
     name = "Model"
   ) +
+  facet_wrap(~term_type, scales = "free_x") +
   labs(
-    x     = "Change in Biomarker per Unit Increase in Risk Score (95% CI)",
-    y     = NULL,
-    title = "Longitudinal Risk Burden: Time Interaction",
-    subtitle = "Change in slope per unit increase in composite risk score (LME)"
+    x     = "\u03b2 (95% CI)",
+    y     = NULL
   ) +
   theme_bw(base_size = 13) +
   theme(
@@ -642,26 +405,32 @@ p_interact_combined <- ggplot(plot_data_interact,
     legend.text      = element_text(size = 9),
     panel.grid.minor = element_blank(),
     plot.title       = element_text(face = "bold", size = 14, hjust = 0.5),
-    plot.subtitle    = element_text(size = 11, hjust = 0.5, color = "grey40"),
+    strip.background = element_rect(fill = "grey92"),
+    strip.text       = element_text(face = "bold", size = 11),
     axis.text        = element_text(size = 11)
   )
 
 print(p_interact_combined)
+
+ggsave(file.path(AIM1_OUTPUT_PATH$figures, "fig4_s_risk_lme_res.png"),
+       p_interact_combined, width = 10, height = 6, dpi = 300)
 ```
 
 ```{r interact-models-results}
+biomarker_order_lme <- BIOMARKER_ORDER_LME
+
 term_order_lme_interact <- c(
   "Time (years)",
   "Composite Risk Score",
   "Time \u00d7 Composite Risk Score",
   "Covariates",
-  "Age", "Sex (Male)", "Education (years)",
+  "Age", "Sex", "Education (years)",
   "Time \u00d7 Covariates",
-  "Time \u00d7 Age", "Time \u00d7 Sex (Male)", "Time \u00d7 Education"
+  "Time \u00d7 Age", "Time \u00d7 Sex", "Time \u00d7 Education"
 )
 
-covariate_terms_interact  <- c("Age", "Sex (Male)", "Education (years)")
-covariate_interact_terms  <- c("Time \u00d7 Age", "Time \u00d7 Sex (Male)", "Time \u00d7 Education")
+covariate_terms_interact  <- c("Age", "Sex", "Education (years)")
+covariate_interact_terms  <- c("Time \u00d7 Age", "Time \u00d7 Sex", "Time \u00d7 Education")
 
 interact_combined_raw <- lme_time_interact %>%
   select(model, outcome, dataf) %>%
@@ -673,24 +442,30 @@ interact_combined_raw <- lme_time_interact %>%
     beta_se     = sprintf("%.3f (%.3f)", estimate, std.error),
     ci          = sprintf("[%.3f, %.3f]", conf.low, conf.high),
     p_fmt       = if_else(p.value < 0.001, "<0.001", sprintf("%.3f", p.value)),
-    # FDR: two separate 12-test families (6 biomarkers \u00d7 2 models each):
+    # Hochberg: two separate 12-test families (6 biomarkers \u00d7 2 models each):
     #   1. Conditional level effect (risk_score main effect at mean follow-up)
     #   2. Time \u00d7 risk score interaction term
     # Covariates, time, and intercept are excluded from correction.
     p_adj = {
       adj <- rep(NA_real_, n())
-      # Family 1: level effect (risk_score*, no colon)
+      # Family 1: level effect (risk_score, no colon) — 12 tests (6 biomarkers × 2 models)
       idx_level <- str_detect(term, "^risk_score") & !str_detect(term, ":")
-      adj[idx_level] <- p.adjust(p.value[idx_level], method = "fdr")
-      # Family 2: time \u00d7 risk score interaction (12 tests)
+      adj[idx_level] <- p.adjust(p.value[idx_level], method = "hochberg")
+      # Family 2: time × risk score interaction — 12 tests (6 biomarkers × 2 models)
       idx_inter <- str_detect(term, "years_centered:risk_score")
-      adj[idx_inter] <- p.adjust(p.value[idx_inter], method = "fdr")
+      adj[idx_inter] <- p.adjust(p.value[idx_inter], method = "hochberg")
       adj
     },
+    p_adj_stars = case_when(
+      is.na(p_adj) | p_adj >= 0.05 ~ "",
+      p_adj < 0.001                ~ "***",
+      p_adj < 0.01                 ~ "**",
+      TRUE                         ~ "*"
+    ),
     p_adj_fmt   = if_else(!is.na(p_adj),
-                          if_else(p_adj < 0.001, "<0.001", sprintf("%.3f", p_adj)),
+                          paste0(if_else(p_adj < 0.001, "<0.001", sprintf("%.3f", p_adj)),
+                                 if_else(p_adj_stars != "", paste0(" ", p_adj_stars), "")),
                           "\u2014"),
-    p_adj_stars = if_else(!is.na(p_adj) & p_adj < 0.05, "sig", ""),
     stars       = case_when(
       p.value < 0.001 ~ "***",
       p.value < 0.01  ~ "**",
@@ -702,9 +477,9 @@ interact_combined_raw <- lme_time_interact %>%
       outcome == "ab_ratio"               ~ "A\u03b242/40",
       outcome == "gfap_log"               ~ "GFAP",
       outcome == "nfl_log"                ~ "NfL",
-      outcome == "ptau181_log"            ~ "ptau-181",
-      outcome == "ptau217_log"            ~ "ptau-217",
-      outcome == "ptau217_ab42_ratio_log" ~ "ptau-217/A\u03b242 ratio"
+      outcome == "ptau181_log"            ~ "ptau181",
+      outcome == "ptau217_log"            ~ "ptau217",
+      outcome == "ptau217_ab42_ratio_log" ~ "ptau217/A\u03b242 ratio"
     ),
     term_label  = case_when(
       term == "(Intercept)"                                         ~ "Intercept",
@@ -712,10 +487,10 @@ interact_combined_raw <- lme_time_interact %>%
       str_detect(term, "^risk_score") & !str_detect(term, ":")     ~ "Composite Risk Score",
       str_detect(term, "years_centered:risk_score")                 ~ "Time \u00d7 Composite Risk Score",
       term == "baseline_age"                                        ~ "Age",
-      term == "sexMale"                                             ~ "Sex (Male)",
+      term == "sexMale"                                             ~ "Sex",
       term == "educ"                                                ~ "Education (years)",
       str_detect(term, "years_centered:baseline_age")               ~ "Time \u00d7 Age",
-      str_detect(term, "years_centered:sexMale")                    ~ "Time \u00d7 Sex (Male)",
+      str_detect(term, "years_centered:sexMale")                    ~ "Time \u00d7 Sex",
       str_detect(term, "years_centered:educ")                       ~ "Time \u00d7 Education",
       TRUE ~ term
     )
@@ -788,11 +563,11 @@ interact_gt <- interact_combined %>%
     CogDrisk_beta_se     = md("**\u03b2 (SE)**"),
     CogDrisk_ci          = md("**95% CI**"),
     CogDrisk_p_fmt       = md("**p**"),
-    CogDrisk_p_adj_fmt   = md("**q**"),
+    CogDrisk_p_adj_fmt   = md("**p.adj**"),
     LIBRA2_beta_se       = md("**\u03b2 (SE)**"),
     LIBRA2_ci            = md("**95% CI**"),
     LIBRA2_p_fmt         = md("**p**"),
-    LIBRA2_p_adj_fmt     = md("**q**")
+    LIBRA2_p_adj_fmt     = md("**p.adj**")
   ) %>%
   cols_hide(columns = c(CogDrisk_stars, CogDrisk_p_adj_stars,
                         LIBRA2_stars,   LIBRA2_p_adj_stars)) %>%
@@ -817,30 +592,8 @@ interact_gt <- interact_combined %>%
       rows    = term_label %in% c(covariate_terms_interact, covariate_interact_terms)
     )
   ) %>%
-  # Unadjusted p significance — light green
-  tab_style(
-    style     = cell_fill(color = "#e8f4e8"),
-    locations = cells_body(columns = CogDrisk_p_fmt,
-                           rows    = CogDrisk_stars %in% c("*", "**", "***"))
-  ) %>%
-  tab_style(
-    style     = cell_fill(color = "#e8f4e8"),
-    locations = cells_body(columns = LIBRA2_p_fmt,
-                           rows    = LIBRA2_stars %in% c("*", "**", "***"))
-  ) %>%
-  # FDR-adjusted q significance — darker green
-  tab_style(
-    style     = cell_fill(color = "#c8e6c9"),
-    locations = cells_body(columns = CogDrisk_p_adj_fmt,
-                           rows    = CogDrisk_p_adj_stars == "sig")
-  ) %>%
-  tab_style(
-    style     = cell_fill(color = "#c8e6c9"),
-    locations = cells_body(columns = LIBRA2_p_adj_fmt,
-                           rows    = LIBRA2_p_adj_stars == "sig")
-  ) %>%
   tab_footnote(
-    footnote  = md("p: unadjusted; q: Benjamini-Hochberg FDR-adjusted across 12 tests (6 biomarkers \u00d7 2 models) within each term family. q is reported for: (1) the composite risk score level effect and (2) the time \u00d7 composite risk score interaction, each corrected in a separate family of 12. Covariate terms are not corrected (\u2014). Light green: p\u202f<\u202f0.05; dark green: q\u202f<\u202f0.05."),
+    footnote  = md("p: unadjusted; p.adj: Hochberg-adjusted within each term family (12 tests per family: 6 biomarkers \u00d7 2 models). p.adj is reported for: 1) the composite risk score level effect and 2) the time \u00d7 composite risk score interaction. Stars denote adjusted p: *<0.05, **<0.01, ***<0.001. Covariate terms are not corrected (\u2014)."),
     locations = cells_column_spanners()
   ) %>%
   cols_align(align = "left",   columns = term_label) %>%
@@ -849,7 +602,7 @@ interact_gt <- interact_combined %>%
 
 interact_gt
 
-# gtsave(interact_gt, filename = file.path(AIM1_OUTPUT_PATH$tables, "s_table5s_lme_interact.docx"))
+gtsave(interact_gt, filename = file.path(AIM1_OUTPUT_PATH$tables, "s_table5s_lme_interact.docx"))
 ```
 
 ### Multivariable model results
@@ -880,20 +633,22 @@ add_mv_plot_cols <- function(df, primary_labels) {
     mutate(
       conf.low    = estimate - 1.96 * std.error,
       conf.high   = estimate + 1.96 * std.error,
-      # FDR on primary predictor terms only; covariates left as NA
+      # Hochberg per predictor family (12 tests: 6 biomarkers × 2 models)
       p_adj = {
-        adj      <- rep(NA_real_, n())
-        idx      <- as.character(display_label) %in% primary_labels
-        adj[idx] <- p.adjust(p.value[idx], method = "fdr")
+        adj <- rep(NA_real_, n())
+        for (lbl in primary_labels) {
+          idx <- as.character(display_label) == lbl
+          adj[idx] <- p.adjust(p.value[idx], method = "hochberg")
+        }
         adj
       },
       sig = factor(
         case_when(
-          !is.na(p_adj) & p_adj < 0.05 ~ "Significant (FDR-adjusted)",
+          !is.na(p_adj) & p_adj < 0.05 ~ "Significant (Hochberg-adjusted)",
           p.value < 0.05               ~ "Significant (non-adjusted)",
           TRUE                         ~ "Not significant"
         ),
-        levels = c("Significant (FDR-adjusted)", "Significant (non-adjusted)", "Not significant")
+        levels = c("Significant (Hochberg-adjusted)", "Significant (non-adjusted)", "Not significant")
       ),
       biomarker   = factor(mv_bm_label(outcome), levels = mv_bm_order),
       model_short = factor(
@@ -907,7 +662,7 @@ mv_coef_layers <- list(
   geom_vline(xintercept = 0, linetype = 2, color = "grey40"),
   scale_alpha_manual(
     values = c(
-      "Significant (FDR-adjusted)" = 1,
+      "Significant (Hochberg-adjusted)" = 1,
       "Significant (non-adjusted)" = 1,
       "Not significant"            = 0.25
     ),
@@ -915,14 +670,14 @@ mv_coef_layers <- list(
   ),
   scale_linewidth_manual(
     values = c(
-      "Significant (FDR-adjusted)" = 1.5,
+      "Significant (Hochberg-adjusted)" = 1.5,
       "Significant (non-adjusted)" = 0.8,
       "Not significant"            = 0.5
     ),
     name = "Significance"
   ),
   scale_color_manual(
-    values = c("CogDrisk" = "#374E55FF", "LIBRA2" = "#DF8F44FF"),
+    values = MODEL_COLORS,
     breaks = c("CogDrisk", "LIBRA2"),
     name   = "Model"
   ),
@@ -942,7 +697,7 @@ mv_coef_layers <- list(
 # ── Multivariable time interaction coefficient plot ────────────────────────────
 inter_term_levels <- rev(c(
   "Time × APOE ε4+", "Time × PXS",
-  "Time × GRS",           "Time × FHx",
+  "Time × PRS",           "Time × FHx",
   "Time × Age", "Time × Sex (Male)", "Time × Education"
 ))
 
@@ -953,7 +708,7 @@ mv_inter_plot_dat <- lme_multivar_interact %>%
     display_label = factor(case_when(
       str_detect(term, "apoe_burden")                 ~ "Time × APOE ε4+",
       str_detect(term, "score_cogd_z|score_libra2_z") ~ "Time × PXS",
-      str_detect(term, "\\bGRS\\b")                   ~ "Time × GRS",
+      str_detect(term, "\\bGRS\\b")                   ~ "Time × PRS",
       str_detect(term, "fhx_burden")                  ~ "Time × FHx",
       str_detect(term, "baseline_age")                ~ "Time × Age",
       str_detect(term, "sexMale")                     ~ "Time × Sex (Male)",
@@ -964,7 +719,7 @@ mv_inter_plot_dat <- lme_multivar_interact %>%
   filter(!is.na(display_label)) %>%
   add_mv_plot_cols(primary_labels = c(
     "Time × APOE ε4+", "Time × PXS",
-    "Time × GRS",           "Time × FHx"
+    "Time × PRS",           "Time × FHx"
   ))
 
 p_mv_inter <- ggplot(mv_inter_plot_dat,
@@ -986,12 +741,12 @@ print(p_mv_inter)
 # ── Row ordering ───────────────────────────────────────────────────────────────
 # row_key: unique sort key; display_label: text shown in table
 mv_row_order <- c(
-  "inter_APOE \u03b54+", "inter_PXS", "inter_GRS", "inter_FHx",
+  "inter_APOE \u03b54+", "inter_PXS", "inter_PRS", "inter_FHx",
   "inter_Covariates",
   "inter_Age", "inter_Sex (Male)", "inter_Education (years)",
   "inter_Time \u00d7",
   "inter_Time \u00d7 APOE \u03b54+", "inter_Time \u00d7 PXS",
-  "inter_Time \u00d7 GRS",           "inter_Time \u00d7 FHx",
+  "inter_Time \u00d7 PRS",           "inter_Time \u00d7 FHx",
   "inter_Time \u00d7 Covariates",
   "inter_Time \u00d7 Age", "inter_Time \u00d7 Sex (Male)", "inter_Time \u00d7 Education"
 )
@@ -1018,9 +773,9 @@ bm_label <- function(outcome) {
     outcome == "ab_ratio"               ~ "A\u03b242/40",
     outcome == "gfap_log"               ~ "GFAP",
     outcome == "nfl_log"                ~ "NfL",
-    outcome == "ptau181_log"            ~ "ptau-181",
-    outcome == "ptau217_log"            ~ "ptau-217",
-    outcome == "ptau217_ab42_ratio_log" ~ "ptau-217/A\u03b242 ratio"
+    outcome == "ptau181_log"            ~ "ptau181",
+    outcome == "ptau217_log"            ~ "ptau217",
+    outcome == "ptau217_ab42_ratio_log" ~ "ptau217/A\u03b242 ratio"
   )
 }
 
@@ -1035,7 +790,7 @@ mv_inter_raw <- lme_multivar_interact %>%
       # Main effect terms within interaction model (no colon)
       !str_detect(term, ":") & term == "apoe_burden"                          ~ "APOE \u03b54+",
       !str_detect(term, ":") & term %in% c("score_cogd_z", "score_libra2_z") ~ "PXS",
-      !str_detect(term, ":") & term == "GRS"                                  ~ "GRS",
+      !str_detect(term, ":") & term == "GRS"                                  ~ "PRS",
       !str_detect(term, ":") & term == "fhx_burden"                           ~ "FHx",
       !str_detect(term, ":") & term == "baseline_age"                         ~ "Age",
       !str_detect(term, ":") & term == "sexMale"                              ~ "Sex (Male)",
@@ -1043,7 +798,7 @@ mv_inter_raw <- lme_multivar_interact %>%
       # Interaction terms (has colon)
       str_detect(term, ":") & str_detect(term, "apoe_burden")                 ~ "Time \u00d7 APOE \u03b54+",
       str_detect(term, ":") & str_detect(term, "score_cogd_z|score_libra2_z") ~ "Time \u00d7 PXS",
-      str_detect(term, ":") & str_detect(term, "\\bGRS\\b")                   ~ "Time \u00d7 GRS",
+      str_detect(term, ":") & str_detect(term, "\\bGRS\\b")                   ~ "Time \u00d7 PRS",
       str_detect(term, ":") & str_detect(term, "fhx_burden")                  ~ "Time \u00d7 FHx",
       str_detect(term, ":") & str_detect(term, "baseline_age")                ~ "Time \u00d7 Age",
       str_detect(term, ":") & str_detect(term, "sexMale")                     ~ "Time \u00d7 Sex (Male)",
@@ -1066,21 +821,28 @@ mv_raw <- mv_inter_raw %>%
       p.value < 0.001 ~ "***", p.value < 0.01 ~ "**",
       p.value < 0.05  ~ "*",   TRUE            ~ ""
     ),
-    # FDR: two separate families — level effects (APOE, PXS, GRS, FHx) and
-    # time × interaction terms; covariates excluded from correction.
+    # Hochberg: 8 families (4 predictors × 2 term types), 12 tests each (6 biomarkers × 2 models)
     p_adj = {
-      adj            <- rep(NA_real_, n())
-      idx_level      <- display_label %in% c("APOE \u03b54+", "PXS", "GRS", "FHx")
-      idx_inter      <- display_label %in% c("Time \u00d7 APOE \u03b54+", "Time \u00d7 PXS",
-                                             "Time \u00d7 GRS",             "Time \u00d7 FHx")
-      adj[idx_level] <- p.adjust(p.value[idx_level], method = "fdr")
-      adj[idx_inter] <- p.adjust(p.value[idx_inter], method = "fdr")
+      lbl <- as.character(display_label)
+      adj <- rep(NA_real_, n())
+      for (family in c("APOE \u03b54+", "PXS", "PRS", "FHx",
+                       "Time \u00d7 APOE \u03b54+", "Time \u00d7 PXS",
+                       "Time \u00d7 PRS",             "Time \u00d7 FHx")) {
+        i <- which(lbl == family)
+        if (length(i) > 0) adj[i] <- p.adjust(p.value[i], method = "hochberg")
+      }
       adj
     },
+    p_adj_stars = case_when(
+      is.na(p_adj) | p_adj >= 0.05 ~ "",
+      p_adj < 0.001                ~ "***",
+      p_adj < 0.01                 ~ "**",
+      TRUE                         ~ "*"
+    ),
     p_adj_fmt   = if_else(!is.na(p_adj),
-                          if_else(p_adj < 0.001, "<0.001", sprintf("%.3f", p_adj)),
-                          "\u2014"),
-    p_adj_stars = if_else(!is.na(p_adj) & p_adj < 0.05, "sig", "")
+                          paste0(if_else(p_adj < 0.001, "<0.001", sprintf("%.3f", p_adj)),
+                                 if_else(p_adj_stars != "", paste0(" ", p_adj_stars), "")),
+                          "\u2014")
   )
 
 # ── Pivot: CogDrisk vs LIBRA2 as columns ─────────────────────────────────────
@@ -1146,11 +908,11 @@ mv_gt <- mv_combined %>%
     CogDrisk_beta_se   = md("**\u03b2 (SE)**"),
     CogDrisk_ci        = md("**95% CI**"),
     CogDrisk_p_fmt     = md("**p**"),
-    CogDrisk_p_adj_fmt = md("**q**"),
+    CogDrisk_p_adj_fmt = md("**p (adj)**"),
     LIBRA2_beta_se     = md("**\u03b2 (SE)**"),
     LIBRA2_ci          = md("**95% CI**"),
     LIBRA2_p_fmt       = md("**p**"),
-    LIBRA2_p_adj_fmt   = md("**q**")
+    LIBRA2_p_adj_fmt   = md("**p (adj)**")
   ) %>%
   cols_hide(columns = c(CogDrisk_stars, CogDrisk_p_adj_stars,
                         LIBRA2_stars,   LIBRA2_p_adj_stars)) %>%
@@ -1169,27 +931,14 @@ mv_gt <- mv_combined %>%
     locations = cells_body(columns = display_label,
                            rows    = display_label %in% mv_indent_labels)
   ) %>%
-  # Unadjusted p — light green
-  tab_style(style = cell_fill(color = "#e8f4e8"),
-            locations = cells_body(columns = CogDrisk_p_fmt,
-                                   rows    = CogDrisk_stars %in% c("*","**","***"))) %>%
-  tab_style(style = cell_fill(color = "#e8f4e8"),
-            locations = cells_body(columns = LIBRA2_p_fmt,
-                                   rows    = LIBRA2_stars %in% c("*","**","***"))) %>%
-  # FDR q — darker green
-  tab_style(style = cell_fill(color = "#c8e6c9"),
-            locations = cells_body(columns = CogDrisk_p_adj_fmt,
-                                   rows    = CogDrisk_p_adj_stars == "sig")) %>%
-  tab_style(style = cell_fill(color = "#c8e6c9"),
-            locations = cells_body(columns = LIBRA2_p_adj_fmt,
-                                   rows    = LIBRA2_p_adj_stars == "sig")) %>%
   tab_footnote(
     footnote = md(paste0(
-      "p: unadjusted; q: Benjamini-Hochberg FDR-adjusted. ",
+      "p: unadjusted; p (adj): Hochberg-adjusted per predictor family ",
+      "(8 families: APOE, PXS, GRS, FHx × main effect/time interaction; 12 tests each: 6 biomarkers \u00d7 2 models). ",
+      "Stars denote adjusted p: *<0.05, **<0.01, ***<0.001. ",
       "PXS = z-scored composite risk score. GRS = polygenic risk score. FHx = family history burden. ",
       "\u03b2: change in biomarker per 1-unit increase in predictor. ",
       "Time \u00d7 \u03b2: additional change in biomarker slope per 1-unit increase in predictor. ",
-      "Light green: p\u202f<\u202f0.05; dark green: q\u202f<\u202f0.05. ",
       "\u2014 = not applicable (CogDrisk model does not adjust for demographic covariates)."
     )),
     locations = cells_column_spanners()
@@ -1292,16 +1041,6 @@ all_nomci_dat_long <- all_nomci_dat %>%
     values_to = "observed"
   )
 
-# Readable outcome labels (ordered for consistent facet display)
-outcome_labels <- c(
-  ab_ratio               = "A\u03b242/40",
-  gfap_log               = "GFAP",
-  nfl_log                = "NfL",
-  ptau181_log            = "ptau-181",
-  ptau217_log            = "ptau-217",
-  ptau217_ab42_ratio_log = "ptau-217/A\u03b242 ratio"
-)
-
 # Add readable labels to plotting datasets (separate vars; risk_dat_long_plot unchanged)
 # Drop NA observed values so late-visit rows (e.g. GFAP=NA at year 10) don't
 # expand the x-scale for panels where that biomarker wasn't measured.
@@ -1377,7 +1116,7 @@ p_cogd_traj <- ggplot() +
 
 print(p_cogd_traj)
 
-# ggsave(file.path(AIM1_OUTPUT_PATH$figures, "fig4_longitudinal_CogDrisk_trajectories.png"),
+# ggsave(file.path(AIM1_OUTPUT_PATH$figures, "fig5_s_longitudinal_CogDrisk_trajectories.png"),
 #        p_cogd_traj, width = 14, height = 10, dpi = 250)
 ```
 
@@ -1483,8 +1222,8 @@ p_libra_traj <- ggplot() +
 
 print(p_libra_traj)
 
-# ggsave(file.path(AIM1_OUTPUT_PATH$figures, "fig5_longitudinal_LIBRA2_trajectories.png"),
-#        p_libra_traj, width = 14, height = 10, dpi = 250)
+ggsave(file.path(AIM1_OUTPUT_PATH$figures, "fig6_s_longitudinal_LIBRA2_trajectories.png"),
+       p_libra_traj, width = 14, height = 10, dpi = 250)
 ```
 
 ## Focused Plot: CogDrisk ptau Trajectories

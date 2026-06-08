@@ -357,6 +357,13 @@ rownames(crs_factors_mf) <- crs_factors$CONP_ID
 crs_mf <- missForest(crs_factors_mf, verbose=TRUE, maxiter=10, ntree=100)
 cat("Imputation complete. OOB error:", crs_mf$OOBerror, "\n")
 
+# Save OOB error metrics
+mf_metrics <- data.frame(
+  metric = names(crs_mf$OOBerror),
+  value  = as.numeric(crs_mf$OOBerror)
+)
+write.csv(mf_metrics, file.path(DATA_INTERMEDIATE_PATH, "missforest_oob_metrics.csv"), row.names = FALSE)
+
 # Extract imputed data
 crs_factors_imputed <- crs_mf$ximp %>%
   rownames_to_column("CONP_ID") %>%
