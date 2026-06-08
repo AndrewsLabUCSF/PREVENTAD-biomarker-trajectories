@@ -103,9 +103,16 @@ Exploratory data analysis and cohort characterization:
 
 #### `/workflow/analysis/aim1`
 **Aim 1: Risk Burden and Biomarker Level Associations**
+
+*Primary analysis scripts:*
 - `aim1_riskburden.qmd/.html`: Risk burden score calculation and descriptives
-- `aim1_crosssectional.qmd/.html`: Cross-sectional associations between risk scores and biomarkers
-- `aim1_longitudinal.qmd`: Longitudinal biomarker trajectories by risk score
+- `aim1_linearregression.qmd`: Multivariable linear regression (individual predictors) and cross-sectional composite score associations; Hochberg-corrected per-predictor family (12 tests per family)
+- `aim1_linearregression_s.qmd`: Sensitivity version of linear regression analyses (excluding MCI progressors)
+- `aim1_lme.qmd`: Linear mixed-effects models (LME) for longitudinal biomarker trajectories; composite × time and individual predictor × time interactions; Hochberg-corrected per-predictor family
+
+*Exploratory / archived:*
+- `aim1_crosssectional.qmd/.html`: Earlier cross-sectional analysis (superseded by aim1_linearregression.qmd)
+- `aim1_longitudinal.qmd`: Earlier longitudinal analysis (superseded by aim1_lme.qmd)
 - `aim1_longitudinal_riskburden_original.qmd`: Longitudinal analysis using original (non-imputed) risk scores
 - `aim1_xsectional_stratified.qmd`: Stratified analyses (APOE, sex, GRS status)
 - `aim1_associations.qmd`: Predictor association plots
@@ -181,9 +188,10 @@ Aim 2 scripts: PREVENT-AD_PET.qmd → PREVENT-AD_SILA.qmd → aim2_cox_sila.qmd
 See `workflow/DATA_PIPELINE.md` for full details on inputs, outputs, and design principles.
 
 ### Imputation Architecture
-- **Centralized imputation**: missForest runs once in `02_clean_PREVENT-AD.R`
+- **Centralized imputation**: missForest (random forest-based single imputation) runs once in `02_clean_PREVENT-AD.R`
 - **Shared imputed data**: All downstream risk score scripts use the same `crsfactors_imputed` dataset
 - **Parallel originals**: Non-imputed versions are retained for sensitivity analyses
+- **OOB imputation error**: NRMSE = 0.027 (continuous variables, excellent); PFC = 0.210 (categorical variables, moderate); score-level SD ratios: CogDRisk = 1.013, LIBRA2 = 1.007
 
 ---
 
@@ -193,20 +201,24 @@ See `workflow/DATA_PIPELINE.md` for full details on inputs, outputs, and design 
 - **CogDRisk**: Dementia risk score (clinical and lifestyle factors)
 - **LIBRA2**: Lifestyle for BRAin health index (12 risk/protective factors)
 - **AD-GRS**: Alzheimer's disease polygenic risk score (Bellenguez 2022 GWAS weights)
-- **Composite risk burden**: 0–4 score (APOE ε4 carrier, high GRS top decile, ≥2 first-degree relatives with AD, high LIBRA2 >1 SD above mean)
+- **Composite risk burden**: 0–4 score (APOE ε4 carrier, top-quartile GRS, ≥2 first-degree relatives with AD, PXS >1 SD above mean)
 - **APOE**: ε4 carrier status
 - **Family history**: ≥2 first-degree relatives with sporadic AD
 
 ### Biomarkers
+**Primary analysis (Aim 1 — 6 biomarkers):**
 - **Amyloid**: Aβ42/40 ratio
-- **Neurodegeneration**: GFAP (glial fibrillary acidic protein), NFL (neurofilament light)
-- **Tau**: p-tau181, p-tau217, p-tau231
+- **Neurodegeneration**: GFAP (glial fibrillary acidic protein), NfL (neurofilament light)
+- **Tau**: p-tau181, p-tau217
 - **Derived**: p-tau217/Aβ42 ratio
+
+**Additional (Aim 2 / exploratory):**
+- p-tau231
+
 - **Positivity thresholds** (PET-anchored, Youden index, Centiloid ≥ 22.32): p-tau181 = 6.42 pg/mL; p-tau217 = 3.06 pg/mL
 
 ### Transformations
-- Log transformations: GFAP, NFL, p-tau181, p-tau217, p-tau217/Aβ42 ratio
-- Square root: p-tau231
+- Log transformations: GFAP, NfL, p-tau181, p-tau217, p-tau217/Aβ42 ratio
 - Untransformed: Aβ42/40 ratio
 
 ---
@@ -232,9 +244,7 @@ For Aim 2, the recommended rendering order is:
 
 ### Important Notes
 - All analyses filter to baseline (at or before first biomarker measurement)
-- missForest imputation is used for missing CRS factor data; imputation quality metrics inform use of original vs. imputed scores
-- CogDRisk imputation quality: SD ratio = 0.823 (acceptable)
-- LIBRA2 imputation quality: SD ratio = 1.654 (concerning — use original scores for primary analyses)
+- missForest (random forest-based single imputation) is used for missing CRS factor data; OOB error: NRMSE = 0.027, PFC = 0.210; score-level SD ratios are 1.013 (CogDRisk) and 1.007 (LIBRA2), indicating acceptable score-level fidelity for both
 - SILA models require ≥2 biomarker visits; participants with only one visit are handled separately via `05_PREVENT-AD_singlevisi_scores.R`
 - Cox models use left truncation (delayed entry) to correct for differential study entry ages
 
