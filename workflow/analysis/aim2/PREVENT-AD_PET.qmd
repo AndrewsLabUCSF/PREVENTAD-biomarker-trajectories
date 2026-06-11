@@ -47,21 +47,24 @@ Using biomarker data already filtered by inclusion criteria (02_clean_PREVENT-AD
 - CONP_ID with at least 2 biomarker visits
 
 ```{r load-biomarkers-processed}
+# Exclusion criteria
+exclude_ids <- readRDS(here("data", "intermediate", "PREVENTAD_missingcrs.rds"))
+
 # Load pre-processed biomarker data (already filtered by inclusion criteria)
-biomarkers <- readRDS(here("data", "intermediate", "PREVENTAD_biomarkers.rds"))
+biomarkers <- readRDS(here("data", "intermediate", "PREVENTAD_biomarkers.rds")) %>% 
+  filter(!CONP_ID %in% exclude_ids$CONP_ID)
 
 # Load demographics for covariates (age, sex, BMI)
 crs_factors <- readRDS(here("data", "intermediate", "PREVENTAD_crsfactors_imputed.rds")) %>%
+  filter(!CONP_ID %in% exclude_ids$CONP_ID) %>%
   select(CONP_ID, Sex, Age, Weight, Height) %>%
   mutate(BMI = Weight / (Height / 100)^2) %>%
   select(CONP_ID, BMI, Sex, Age)
 
-# Get list of participants meeting inclusion criteria
-criteria_met <- biomarkers %>%
-  distinct(CONP_ID)
+
 
 cat("=== INCLUSION CRITERIA (from pre-processed data) ===\n")
-cat("Participants meeting criteria:", nrow(criteria_met), "\n")
+cat("Participants meeting criteria:", nrow(crs_factors$CONP_ID), "\n")
 cat("Total biomarker observations:", nrow(biomarkers), "\n")
 ```
 
@@ -73,7 +76,7 @@ pet_nav <- read_csv(
   file.path(PREVENTAD_DATA_PATH,
             "PET_NAV_SUVR_ref-wholeCerebellum_Registered_PREVENTAD_2025-03-21.csv"),
   show_col_types = FALSE
-)
+) 
 
 pet_info <- read_csv(
   file.path(PREVENTAD_DATA_PATH,
@@ -81,10 +84,10 @@ pet_info <- read_csv(
   show_col_types = FALSE
 )
 
-# Process PET data - apply inclusion criteria
+# Process PET data - apply exclusion criteria
 pet_amyloid <- pet_nav %>%
-  filter(PET_tracer == "NAV") %>%
-  filter(CONP_ID %in% criteria_met$CONP_ID) %>%
+  filter(PET_tracer == "NAV") %>% 
+  filter(!CONP_ID %in% exclude_ids$CONP_ID) %>%
   select(CONP_ID, session, amyloid_index_SUVR, WhlCbl_centiloid) %>%
   rename(
     pet_session = session,

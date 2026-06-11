@@ -364,42 +364,34 @@ plot_data_interact <- lme_results %>%
     )))
   )
 
-p_interact_combined <- ggplot(plot_data_interact,
-  aes(x = estimate, y = outcome_label,
-      xmin = conf.low, xmax = conf.high,
-      color = risk_type, alpha = sig,
-      group = risk_type)
-) +
-  geom_point(size = 3, position = position_dodge(width = 0.6)) +
-  geom_errorbarh(aes(linewidth = sig), position = position_dodge(width = 0.6), height = 0.3) +
-  geom_vline(xintercept = 0, linetype = 2, color = "grey40") +
+interact_layers <- list(
+  geom_point(size = 3, position = position_dodge(width = 0.6)),
+  geom_errorbarh(aes(linewidth = sig), position = position_dodge(width = 0.6), height = 0.3),
+  geom_vline(xintercept = 0, linetype = 2, color = "grey40"),
   scale_alpha_manual(
     values = c(
       "Significant (Hochberg-adjusted)" = 1,
-      "Significant (non-adjusted)" = 1,
-      "Not significant"            = 0.25
+      "Significant (non-adjusted)"      = 1,
+      "Not significant"                 = 0.25
     ),
     name = "Significance"
-  ) +
+  ),
   scale_linewidth_manual(
     values = c(
       "Significant (Hochberg-adjusted)" = 1.5,
-      "Significant (non-adjusted)" = 0.8,
-      "Not significant"            = 0.5
+      "Significant (non-adjusted)"      = 0.8,
+      "Not significant"                 = 0.5
     ),
     name = "Significance"
-  ) +
+  ),
   scale_color_manual(
     values = MODEL_COLORS,
     breaks = c("CogDrisk", "LIBRA2"),
-    name = "Model"
-  ) +
-  facet_wrap(~term_type, scales = "free_x") +
-  labs(
-    x     = "\u03b2 (95% CI)",
-    y     = NULL
-  ) +
-  theme_bw(base_size = 13) +
+    name   = "Model"
+  ),
+  facet_wrap(~term_type, scales = "free_x"),
+  labs(x = "\u03b2 (95% CI)", y = NULL),
+  theme_bw(base_size = 13),
   theme(
     legend.position  = "bottom",
     legend.title     = element_text(size = 10, face = "bold"),
@@ -410,6 +402,28 @@ p_interact_combined <- ggplot(plot_data_interact,
     strip.text       = element_text(face = "bold", size = 11),
     axis.text        = element_text(size = 11)
   )
+)
+
+# Top panel: A\u03b242/40 only (own x-scale) \u2014 hide legend here
+p_interact_ab <- ggplot(
+  filter(plot_data_interact, outcome == "ab_ratio"),
+  aes(x = estimate, y = outcome_label,
+      xmin = conf.low, xmax = conf.high,
+      color = risk_type, alpha = sig, group = risk_type)
+) + interact_layers +
+  theme(legend.position = "none")
+
+# Bottom panel: remaining biomarkers \u2014 keep legend here
+p_interact_rest <- ggplot(
+  filter(plot_data_interact, outcome != "ab_ratio"),
+  aes(x = estimate, y = outcome_label,
+      xmin = conf.low, xmax = conf.high,
+      color = risk_type, alpha = sig, group = risk_type)
+) + interact_layers +
+  theme(legend.position = "bottom")
+
+p_interact_combined <- p_interact_ab / p_interact_rest +
+  plot_layout(heights = c(1, 5))
 
 print(p_interact_combined)
 

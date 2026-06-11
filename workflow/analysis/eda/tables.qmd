@@ -20,16 +20,18 @@ baseline_dat <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_baseline.rds"))
 mci_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_MCI.rds"))
 ```
 
+```{r load-pet-amyloid}
+# Load pre-processed PET data (inclusion criteria already applied: GWAS data + >=2 biomarker visits)
+# amyloid_positive uses primary threshold CL >= 22.32
+pet_amyloid_status <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_PET_amyloid.rds")) %>%
+  group_by(CONP_ID) %>%
+  summarise(amyloid_pet_pos = as.integer(any(amyloid_positive == 1L)), .groups = "drop")
+```
+
 # Table 1: Baseline participant characteristics stratified by MCI status
 
 ```{r table-1}
 mci_ids <- mci_dat %>% distinct(CONP_ID) %>% pull(CONP_ID)
-
-dementia_ids <- PREVENTAD_dat$diagnosis %>%
-  filter(Clinical_diagnosis == "Dementia",
-         CONP_ID %in% baseline_dat$CONP_ID) %>%
-  distinct(CONP_ID) %>%
-  pull(CONP_ID)
 
 table1_data <- baseline_dat %>%
   left_join(
@@ -38,23 +40,24 @@ table1_data <- baseline_dat %>%
       mutate(Ethnicity = str_to_sentence(Ethnicity)),
     by = "CONP_ID"
   ) %>%
+  left_join(pet_amyloid_status, by = "CONP_ID") %>%
   mutate(
     female    = if_else(sex == "Female", 1, 0),
     caucasian = if_else(Ethnicity == "Caucasian", 1, 0),
     mci_status = factor(
       case_when(
-        CONP_ID %in% dementia_ids ~ "Progressed to Dementia",
+        #CONP_ID %in% dementia_ids ~ "Progressed to Dementia",
         CONP_ID %in% mci_ids      ~ "Progressed to MCI",
         TRUE                       ~ "Remained CU"
       ),
-      levels = c("Remained CU", "Progressed to MCI", "Progressed to Dementia")
+      levels = c("Remained CU", "Progressed to MCI")
     ),
     risk_score_cogd_f   = factor(risk_score_cogd,   levels = 0:4),
     risk_score_libra2_f = factor(risk_score_libra2, levels = 0:3)
   ) %>%
   select(
     # Demographics
-    age, female, educ, caucasian,
+    age, female, educ, caucasian, amyloid_pet_pos,
     # AD risk factors
     apoe, FDR_AD, GRS, score_cogd, score_libra2,
     # Risk indicators (binarized)
@@ -71,8 +74,9 @@ table1_gtsummary <- table1_data %>%
   tbl_summary(
     by = mci_status,
     type = list(
-      female    ~ "dichotomous",
-      caucasian ~ "dichotomous",
+      female          ~ "dichotomous",
+      caucasian       ~ "dichotomous",
+      amyloid_pet_pos ~ "dichotomous",
       apoe_burden ~ "dichotomous",
       fhx_burden ~ "dichotomous",
       cogdrisk_burden ~ "dichotomous", 
@@ -84,6 +88,7 @@ table1_gtsummary <- table1_data %>%
       female             = "Female",
       educ               = "Years of education",
       caucasian          = "Caucasian",
+      amyloid_pet_pos    = "Amyloid PET positive",
       apoe               = "APOE genotype",
       FDR_AD             = "FDRs with AD",
       GRS                = "Polygenic risk score",
@@ -121,7 +126,7 @@ table1_gtsummary <- table1_data %>%
     ~.x %>%
       mutate(
         grouping = case_when(
-          variable %in% c("age", "female", "educ", "caucasian")                   ~ "Demographics",
+          variable %in% c("age", "female", "educ", "caucasian", "amyloid_pet_pos") ~ "Demographics",
           variable %in% c("apoe", "FDR_AD", "GRS", "score_cogd", "score_libra2")  ~ "AD risk factors",
           variable %in% c("apoe_burden", "fhx_burden", "cogdrisk_burden", "libra2_burden",
                           "grs_burden")                                           ~ "AD risk indicators",
@@ -174,7 +179,7 @@ table1_gt <- table1_gtsummary %>%
 
 table1_gt
 
-# gtsave(table1_gt, filename = file.path(EDA_OUTPUT_PATH$tables, "table1_baseline_characteristics.docx"))
+gtsave(table1_gt, filename = file.path(EDA_OUTPUT_PATH$tables, "table1_baseline_characteristics.docx"))
 ```
 
 ## Table 1a for defense slides
@@ -191,8 +196,8 @@ table1a_data <- baseline_dat %>%
     female    = if_else(sex == "Female", 1, 0),
     caucasian = if_else(Ethnicity == "Caucasian", 1, 0),
     mci_prog_status = factor(
-      if_else(CONP_ID %in% mci_ids, "MCI or Dementia", "Remained CU"),
-      levels = c("Remained CU", "MCI or Dementia")
+      if_else(CONP_ID %in% mci_ids, "Progressed to MCI", "Remained CU"),
+      levels = c("Remained CU", "Progressed to MCI")
     )
   ) %>%
   select(
@@ -270,7 +275,7 @@ table1a_gt <- table1a_gtsummary %>%
   as_gt() %>%
   tab_header(
     title    = md("**Baseline Characteristics of PREVENT-AD Sample**"),
-    subtitle = md("PREVENT-AD participants stratified by cognitive outcome")
+    subtitle = md("PREVENT-AD participants stratified by MCI progression status")
   ) %>%
   tab_row_group(
     label = md("**Baseline biomarkers**"),
