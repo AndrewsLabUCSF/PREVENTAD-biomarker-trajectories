@@ -378,7 +378,7 @@ interact_layers <- list(
   ),
   scale_linewidth_manual(
     values = c(
-      "Significant (Hochberg-adjusted)" = 1.5,
+      "Significant (Hochberg-adjusted)" = 2,
       "Significant (non-adjusted)"      = 0.8,
       "Not significant"                 = 0.5
     ),
@@ -390,10 +390,12 @@ interact_layers <- list(
     name   = "Model"
   ),
   facet_wrap(~term_type, scales = "free_x"),
-  labs(x = "\u03b2 (95% CI)", y = NULL),
+  labs(x = "Beta (95% CI)", y = NULL),
   theme_bw(base_size = 13),
   theme(
     legend.position  = "bottom",
+    legend.box       = "vertical",
+    legend.spacing   = unit(0.5, "pt"),
     legend.title     = element_text(size = 10, face = "bold"),
     legend.text      = element_text(size = 9),
     panel.grid.minor = element_blank(),
@@ -411,7 +413,8 @@ p_interact_ab <- ggplot(
       xmin = conf.low, xmax = conf.high,
       color = risk_type, alpha = sig, group = risk_type)
 ) + interact_layers +
-  theme(legend.position = "none")
+  theme(legend.position = "none",
+        axis.title.x = element_blank())
 
 # Bottom panel: remaining biomarkers \u2014 keep legend here
 p_interact_rest <- ggplot(
@@ -427,8 +430,8 @@ p_interact_combined <- p_interact_ab / p_interact_rest +
 
 print(p_interact_combined)
 
-# ggsave(file.path(AIM1_OUTPUT_PATH$figures, "fig4_risk_lme_res.png"),
-#        p_interact_combined, width = 10, height = 6, dpi = 300)
+ggsave(file.path(AIM1_OUTPUT_PATH$figures, "fig4_risk_lme_res.jpg"),
+       p_interact_combined, width = 10, height = 6, dpi = 300)
 ```
 
 ```{r interact-models-results}
@@ -1068,8 +1071,7 @@ cogdrisk_pred_lbl <- cogdrisk_predictions %>%
 
 # Interaction: time × risk score (divergence in slope)
 cogd_annot_inter <- lme_results %>%
-  filter(model_type == "Time Interaction",
-         risk_type  == "CogDrisk",
+  filter(risk_type  == "CogDrisk",
          str_detect(term, "years_centered:risk_score")) %>%
   mutate(
     outcome_label = factor(outcome_labels[outcome], levels = outcome_labels),
@@ -1105,11 +1107,11 @@ p_cogd_traj <- ggplot() +
     aes(x = -Inf, y = Inf, label = annot),
     inherit.aes = FALSE,
     hjust = -0.04, vjust = 1.75,
-    size = 5, color = "grey20",
+    size = 3.5, color = "grey20",
     label.padding = unit(0.2, "lines")
   ) +
   scale_color_viridis_d(option = "plasma", begin = 0.2, end = 0.9,
-                        name = "# Risk Indicators") +
+                        name = "Risk Score (0-4)") +
   scale_x_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
   scale_y_continuous(expand = expansion(mult = c(0.02, 0.05))) +
   facet_wrap(~outcome_label, scales = "free", ncol = 3) +
@@ -1119,23 +1121,24 @@ p_cogd_traj <- ggplot() +
   ) +
   theme_bw(base_size = 12) +
   theme(
-    legend.position = "bottom",
-    strip.text = element_text(face = "bold"),
+    axis.title.y = element_blank(),
+    axis.text.y    = element_text(size = 14),
+    axis.text.x    = element_text(size = 12),
+    axis.title     = element_text(size = 16, face = "bold"),
+    #plot.title     = element_text(size = 15, hjust = 0.5, face = "bold"),
+    #plot.caption   = element_text(size = 9, hjust = 0, lineheight = 1.2,
+    #                              margin = margin(t = 10)),
     strip.background = element_rect(fill = "grey90"),
-    plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
-    # plot.subtitle = element_text(size = 12, hjust = 0.5),
-    # plot.caption = element_text(size = 9, hjust = 0, lineheight = 1.2,
-    legend.title     = element_text(size = 10, face = "bold"),
-    legend.text      = element_text(size = 9),
-    panel.grid.minor = element_blank(),
-    plot.subtitle    = element_text(size = 11, hjust = 0.5, color = "grey40"),
-    axis.text        = element_text(size = 11)
+    strip.text     = element_text(face = "bold", size = 14),
+    legend.position = "bottom",
+    legend.title   = element_text(size = 15, face = "bold"),
+    legend.text    = element_text(size = 14)
   )
 
 print(p_cogd_traj)
 
 ggsave(file.path(AIM1_OUTPUT_PATH$figures, "fig5_longitudinal_CogDrisk_trajectories.png"),
-       p_cogd_traj, width = 14, height = 10, dpi = 250)
+       p_cogd_traj, width = 10, height = 8, dpi = 300)
 ```
 
 ## LIBRA2
@@ -1182,8 +1185,7 @@ libra2_pred_lbl <- libra2_predictions %>%
 
 # Per-panel annotation: time × risk score interaction
 libra2_annot_inter <- lme_results %>%
-  filter(model_type == "Time Interaction",
-         risk_type  == "LIBRA2",
+  filter(risk_type  == "LIBRA2",
          str_detect(term, "years_centered:risk_score")) %>%
   mutate(
     outcome_label = factor(outcome_labels[outcome], levels = outcome_labels),
@@ -1214,11 +1216,11 @@ p_libra_traj <- ggplot() +
     aes(x = -Inf, y = Inf, label = annot),
     inherit.aes = FALSE,
     hjust = -0.04, vjust = 1.75,
-    size = 5, color = "grey20",
+    size = 3.5, color = "grey20",
     label.padding = unit(0.2, "lines")
   ) +
   scale_color_viridis_d(option = "plasma", begin = 0.2, end = 0.9,
-                        name = "# Risk Indicators") +
+                        name = "Risk Score (0-4)") +
   scale_x_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
   scale_y_continuous(expand = expansion(mult = c(0.02, 0.05))) +
   facet_wrap(~outcome_label, scales = "free", ncol = 3) +
@@ -1230,23 +1232,70 @@ p_libra_traj <- ggplot() +
   ) +
   theme_bw(base_size = 12) +
   theme(
-    legend.position = "bottom",
-    strip.text = element_text(face = "bold"),
+    axis.title.y = element_blank(),
+    axis.text.y    = element_text(size = 14),
+    axis.text.x    = element_text(size = 12),
+    axis.title     = element_text(size = 16, face = "bold"),
+    #plot.title     = element_text(size = 15, hjust = 0.5, face = "bold"),
+    #plot.caption   = element_text(size = 9, hjust = 0, lineheight = 1.2,
+    #                              margin = margin(t = 10)),
     strip.background = element_rect(fill = "grey90"),
-    plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
-    # plot.subtitle = element_text(size = 12, hjust = 0.5),
-    # plot.caption = element_text(size = 9, hjust = 0, lineheight = 1.2,
-    legend.title     = element_text(size = 10, face = "bold"),
-    legend.text      = element_text(size = 9),
-    panel.grid.minor = element_blank(),
-    plot.subtitle    = element_text(size = 11, hjust = 0.5, color = "grey40"),
-    axis.text        = element_text(size = 11)
+    strip.text     = element_text(face = "bold", size = 14),
+    legend.position = "bottom",
+    legend.title   = element_text(size = 15, face = "bold"),
+    legend.text    = element_text(size = 14)
   )
 
 print(p_libra_traj)
 
 ggsave(file.path(AIM1_OUTPUT_PATH$figures, "fig6_longitudinal_LIBRA2_trajectories.png"),
-       p_libra_traj, width = 14, height = 10, dpi = 250)
+       p_libra_traj, width = 10, height = 8, dpi = 300)
+```
+
+## Faceted plot for manuscript
+
+```{r trajectories-combined}
+#| fig-width: 22
+#| fig-height: 10
+
+p_cogd_side <- p_cogd_traj +
+  labs(title = "CogDrisk") +
+  theme(
+    plot.title      = element_text(size = 16, face = "bold", hjust = 0.5),
+    legend.position = "none"
+  )
+
+p_libra_side <- p_libra_traj +
+  labs(title = "LIBRA2") +
+  theme(
+    plot.title      = element_text(size = 16, face = "bold", hjust = 0.5),
+    legend.position = "none"
+  )
+
+# Standalone legend panel — invisible points, visible keys via override
+legend_panel <- ggplot(
+  tibble(risk = factor(0:4), x = 0:4, y = rep(0, 5)),
+  aes(x = x, y = y, color = risk)
+) +
+  geom_point(alpha = 0) +
+  scale_color_viridis_d(option = "plasma", begin = 0.2, end = 0.9,
+                        name = "Risk Score (0-4)") +
+  guides(color = guide_legend(override.aes = list(alpha = 1))) +
+  theme_void() +
+  theme(legend.position = "top", legend.direction = "horizontal",
+        legend.title    = element_text(size = 15, face = "bold"),
+        legend.text     = element_text(size = 14),
+        #legend.key.size = unit(1.2, "lines"),
+        plot.margin     = margin(0, 0, 0, 0))
+
+p_traj_combined <- (p_cogd_side | p_libra_side) /
+  legend_panel +
+  plot_layout(heights = unit(c(7.75, 0.4), "in"))
+
+print(p_traj_combined)
+
+ggsave(file.path(AIM1_OUTPUT_PATH$figures, "fig5_longitudinal_trajectories_combined.jpg"),
+       p_traj_combined, width = 22, height = 10, dpi = 300)
 ```
 
 ## Focused Plot: CogDrisk ptau Trajectories

@@ -29,6 +29,9 @@ lastvisit_dat <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_lastvisit.rds")
 cogd_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_cogd_scored.rds"))
 libra2_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_libra2_scored.rds"))
 all_dat <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_longitudinal.rds"))
+baseline_dat <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_baseline.rds"))
+mci_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_MCI.rds"))
+raw_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_raw.rds"))
 
 lastvisit_longer <- lastvisit_dat %>%
   pivot_longer(
@@ -36,6 +39,12 @@ lastvisit_longer <- lastvisit_dat %>%
     names_to = "biomarker",
     values_to = "measure"
   )
+
+mci_ids <- mci_dat %>% distinct(CONP_ID) %>% pull(CONP_ID)
+dementia_ids <- raw_dat$diagnosis %>%
+  filter(Clinical_diagnosis == "Dementia",
+         CONP_ID %in% baseline_dat$CONP_ID) %>%
+  distinct(CONP_ID) %>% pull(CONP_ID)
 ```
 
 ## Overview
@@ -178,6 +187,7 @@ fhx_plot
 ## Demographic risk factor associations with biomarker levels (last visit)
 
 ### Age
+
 ```{r age}
 dem_dat_longer <- lastvisit_longer %>%
   select(age, sex, educ, biomarker, measure)
@@ -203,6 +213,7 @@ dem_age_plot <- dem_dat_longer %>%
   theme(legend.position = "bottom") 
 dem_age_plot
 ```
+
 ### Sex
 
 ```{r sex}
@@ -375,11 +386,11 @@ cogd_res_table <- res_cogd_preventad %>%
     columns = ends_with("ab42_ratio_log")
   ) %>%
   cols_label(
-    starts_with("estimate")~ md("*Beta*"),
-    starts_with("std.error")~ md("*SE*"),
-    starts_with("statistic")~md("*Statistic*"),
-    starts_with("p.value")~ md("*p.value*"),
-    starts_with("stars")~ ""
+    starts_with("estimate") ~ md("*Beta*"),
+    starts_with("std.error") ~ md("*SE*"),
+    starts_with("statistic") ~md("*Statistic*"),
+    starts_with("p.value") ~ md("*p.value*"),
+    starts_with("stars") ~ ""
   ) %>%
   tab_header(title = md("**Biomarker ~ CogDrisk Factors**")) 
 cogd_res_table
@@ -531,11 +542,11 @@ libra_res_table <- res_libra_preventad %>%
       columns = ends_with("ab42_ratio_log")
     ) %>%
     cols_label(
-      starts_with("estimate")~ md("*Beta*"),
-      starts_with("std.error")~ md("*SE*"),
-      starts_with("statistic")~md("*Statistic*"),
-      starts_with("p.value")~ md("*p.value*"),
-      starts_with("stars")~ ""
+      starts_with("estimate") ~ md("*Beta*"),
+      starts_with("std.error") ~ md("*SE*"),
+      starts_with("statistic") ~md("*Statistic*"),
+      starts_with("p.value") ~ md("*p.value*"),
+      starts_with("stars") ~ ""
     ) %>%
     tab_header(title = md("**Biomarker ~ LIBRA2 Factors**")) 
 libra_res_table
@@ -582,54 +593,37 @@ res_plot
 ## Upset plot
 
 ```{r upset-plot}
-#| fig-width: 20
-#| fig-height: 7
-
 library(UpSetR)
 library(png)
 library(grid)
 library(gridExtra)
 
-# ── 1. Setup ────────────────────────────────────────────────────────────────────
-baseline_dat  <- readRDS(file.path(DATA_CLEANED_PATH, "PREVENTAD_baseline.rds"))
-mci_dat_u     <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_MCI.rds"))
-raw_dat       <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_raw.rds"))
-
-mci_ids      <- mci_dat_u %>% distinct(CONP_ID) %>% pull(CONP_ID)
-dementia_ids <- raw_dat$diagnosis %>%
-  filter(Clinical_diagnosis == "Dementia",
-         CONP_ID %in% baseline_dat$CONP_ID) %>%
-  distinct(CONP_ID) %>% pull(CONP_ID)
-
-# ── 2. Build binary indicator matrix ────────────────────────────────────────────
-# UpSetR needs integer 0/1 columns; keep CONP_ID for element queries.
-# Column names become the axis labels, so use display-friendly names directly.
+# Binary indicator matrix
 upset_base <- baseline_dat %>%
   mutate(
-    mci_status            = factor(case_when(
+    mci_status = factor(case_when(
       CONP_ID %in% dementia_ids ~ "Progressed to Dementia",
-      CONP_ID %in% mci_ids      ~ "Progressed to MCI",
-      TRUE                       ~ "Remained CU"
+      CONP_ID %in% mci_ids ~ "Progressed to MCI",
+      TRUE ~ "Remained CU"
     ), levels = c("Remained CU", "Progressed to MCI", "Progressed to Dementia")),
-    `Family History`      = as.integer(!is.na(fhx_burden)     & fhx_burden == 1),
-    `APOE e4+`            = as.integer(!is.na(apoe_burden)     & apoe_burden == 1),
-    `PRS (top quartile)`  = as.integer(!is.na(grs_burden)      & grs_burden == 1),
-    `CogDrisk (>1 SD)`    = as.integer(!is.na(cogdrisk_burden) & cogdrisk_burden == 1),
-    `LIBRA2 (>1 SD)`      = as.integer(!is.na(libra2_burden)   & libra2_burden == 1)
+    `FHx` = as.integer(!is.na(fhx_burden) & fhx_burden == 1),
+    `APOE e4+` = as.integer(!is.na(apoe_burden) & apoe_burden == 1),
+    `PRS (top quartile)` = as.integer(!is.na(grs_burden) & grs_burden == 1),
+    `CogDrisk (>1 SD)` = as.integer(!is.na(cogdrisk_burden) & cogdrisk_burden == 1),
+    `LIBRA2 (>1 SD)` = as.integer(!is.na(libra2_burden) & libra2_burden == 1)
   ) %>%
   select(CONP_ID, mci_status,
-         `Family History`, `APOE e4+`, `PRS (top quartile)`,
+         `FHx`, `APOE e4+`, `PRS (top quartile)`,
          `CogDrisk (>1 SD)`, `LIBRA2 (>1 SD)`)
 
-# Sets for each panel — order is bottom→top in the matrix, so clinical score goes
-# first (bottom) and APOE last (top) to match the requested display order.
-set_cols_cogd  <- c("CogDrisk (>1 SD)", "Family History", "PRS (top quartile)", "APOE e4+")
-set_cols_libra2 <- c("LIBRA2 (>1 SD)",  "Family History", "PRS (top quartile)", "APOE e4+")
+# Sets for each panel 
+set_cols_cogd  <- c("CogDrisk (>1 SD)", "FHx", "PRS (top quartile)", "APOE e4+")
+set_cols_libra2 <- c("LIBRA2 (>1 SD)",  "FHx", "PRS (top quartile)", "APOE e4+")
 
 upset_input <- as.data.frame(upset_base) %>%
   mutate(CONP_ID = as.character(CONP_ID))
 
-# ── 3. Element IDs for MCI-status queries ───────────────────────────────────────
+# Element IDs for MCI/dementia status 
 mci_ids_v <- upset_base %>%
   filter(mci_status == "Progressed to MCI") %>%
   pull(CONP_ID) %>% as.character()
@@ -638,74 +632,111 @@ dem_ids_v <- upset_base %>%
   filter(mci_status == "Progressed to Dementia") %>%
   pull(CONP_ID) %>% as.character()
 
-# ── 4. Shared upset arguments ────────────────────────────────────────────────────
+# Shared upset arguments
 common_args <- list(
-  data             = upset_input,
-  nintersects      = 20,
-  order.by         = "freq",
-  keep.order       = TRUE,
-  main.bar.color   = "#4575B4",
-  mainbar.y.label  = "Intersection Size",
-  sets.x.label     = "Set Size",
-  # Single scalar applies uniformly to all text including the query legend.
-  # (The 6-element vector form only controls specific axes and misses the legend.)
-  text.scale       = 2,
-  point.size       = 4,
-  line.size        = 2,
-  mb.ratio         = c(0.65, 0.35),
-  queries          = list(
-    list(query      = elements,
-         params     = list("CONP_ID", mci_ids_v),
-         color      = "#FD9209",
-         active     = TRUE,
+  data = upset_input,
+  nintersects = 20,
+  order.by = "freq",
+  keep.order = TRUE,
+  main.bar.color = "blue",
+  mainbar.y.label = "Intersection Size",
+  sets.x.label = "Set Size",
+  # c(intersect-title, intersect-ticks, set-title, set-ticks, set-names, bar-numbers)
+  text.scale = c(3, 3, 3, 2.2, 3, 3),
+  point.size = 5,
+  line.size = 3,
+  mb.ratio = c(0.65, 0.35),
+  queries = list(
+    list(query = elements,
+         params = list("CONP_ID", mci_ids_v),
+         color = "orange",
+         active = TRUE,
          query.name = "Progressed to MCI"),
-    list(query      = elements,
-         params     = list("CONP_ID", dem_ids_v),
-         color      = "#D73027",
-         active     = TRUE,
+    list(query = elements,
+         params = list("CONP_ID", dem_ids_v),
+         color = "red",
+         active = TRUE,
          query.name = "Progressed to Dementia")
   ),
-  query.legend     = "top"
+  query.legend = "none"  
 )
 
-# ── 5. Render each panel to a temp PNG ──────────────────────────────────────────
-# as_grob() / grid.grabExpr() don't capture UpSetR's internal grid output reliably.
-# Rendering to temp files then reading back as rasterGrobs is the safe alternative.
+# Render each panel to a temp PNG
 tmp_cogd  <- tempfile(fileext = ".png")
 tmp_libra2 <- tempfile(fileext = ".png")
 
-png(tmp_cogd,  width = 10, height = 7, units = "in", res = 150)
+png(tmp_cogd,  width = 8, height = 7, units = "in", res = 300)
 do.call(upset, c(common_args, list(sets = set_cols_cogd)))
 dev.off()
 
-png(tmp_libra2, width = 10, height = 7, units = "in", res = 150)
+png(tmp_libra2, width = 8, height = 7, units = "in", res = 300)
 do.call(upset, c(common_args, list(sets = set_cols_libra2)))
 dev.off()
 
-# ── 6. Read back as rasterGrobs, label, and arrange side by side ─────────────────
+# Upset panels w color legend
+p_legend <- ggplot(
+  data.frame(
+    status = factor(
+      c("Remained CU", "Progressed to MCI", "Progressed to Dementia"),
+      levels = c("Remained CU", "Progressed to MCI", "Progressed to Dementia")
+    )
+  ),
+  aes(x = status, y = 1, fill = status)
+) +
+  geom_col(width = 0, alpha = 0) +   
+  scale_fill_manual(
+    values = c("Remained CU" = "blue",
+               "Progressed to MCI" = "orange",
+               "Progressed to Dementia" = "red"),
+    name = NULL
+  ) +
+  guides(fill = guide_legend(override.aes = list(alpha = 1))) +
+  theme_void() +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.text = element_text(size = 20),
+    legend.key.size = unit(1, "cm"),
+    legend.spacing.x = unit(1, "cm"),
+    plot.margin = margin(t = 0, r = 0, b = 10, l = 0, unit = "pt")
+  )
+
+tmp_legend <- tempfile(fileext = ".png")
+png(tmp_legend, width = 16, height = 0.7, units = "in", res = 300)
+print(p_legend)
+dev.off()
+legend_img <- rasterGrob(readPNG(tmp_legend), interpolate = TRUE)
+
+# Read back as rasterGrobs, label, and arrange side by side
 img_cogd  <- rasterGrob(readPNG(tmp_cogd),  interpolate = TRUE)
 img_libra2 <- rasterGrob(readPNG(tmp_libra2), interpolate = TRUE)
 
 make_panel <- function(img, label) {
   arrangeGrob(
-    textGrob(label, hjust = 0, x = 0.01,
-             gp = gpar(fontsize = 13, fontface = "bold")),
+    textGrob(label, hjust = 0.5, x = 0.5,
+             gp = gpar(fontsize = 16, fontface = "bold")),
     img,
     nrow = 2, heights = c(0.04, 0.96)
   )
 }
 
 p_combined <- arrangeGrob(
-  make_panel(img_cogd,  "CogDrisk"),
-  make_panel(img_libra2, "LIBRA2"),
-  ncol = 2
+  textGrob(""),   # top padding row
+  arrangeGrob(
+    make_panel(img_cogd,  "CogDrisk"),
+    make_panel(img_libra2, "LIBRA2"),
+    ncol = 2
+  ),
+  legend_img,
+  nrow    = 3,
+  heights = c(0.02, 0.92, 0.06)
 )
 
 grid.draw(p_combined)
 
 # Save
-png(file.path(EDA_OUTPUT_PATH$figures, "fig1_upsetplot.png"),
-    width = 20, height = 7, units = "in", res = 300)
+png(file.path(EDA_OUTPUT_PATH$figures, "fig1_upsetplot.jpg"),
+    width = 12, height = 8, units = "in", res = 300)
 grid.draw(p_combined)
 dev.off()
 ```

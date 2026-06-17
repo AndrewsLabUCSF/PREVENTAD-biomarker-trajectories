@@ -21,11 +21,20 @@ mci_dat <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_MCI.rds"))
 ```
 
 ```{r load-pet-amyloid}
-# Load pre-processed PET data (inclusion criteria already applied: GWAS data + >=2 biomarker visits)
-# amyloid_positive uses primary threshold CL >= 22.32
-pet_amyloid_status <- readRDS(file.path(DATA_INTERMEDIATE_PATH, "PREVENTAD_PET_amyloid.rds")) %>%
+# Replicate inclusion criteria from PREVENT-AD_PET.qmd:
+#   exclude participants missing CRS/GWAS data, then apply primary CL >= 22.32 threshold
+# exclude_ids_pet <- readRDS(here("data", "intermediate", "PREVENTAD_missingcrs.rds"))
+
+pet_amyloid_status <- read_csv(
+  file.path(PREVENTAD_DATA_PATH,
+            "PET_NAV_SUVR_ref-wholeCerebellum_Registered_PREVENTAD_2025-03-21.csv"),
+  show_col_types = FALSE
+) %>%
+  filter(PET_tracer == "NAV") %>%
+  # filter(!CONP_ID %in% exclude_ids_pet$CONP_ID) %>%
+  select(CONP_ID, centiloid = WhlCbl_centiloid) %>%
   group_by(CONP_ID) %>%
-  summarise(amyloid_pet_pos = as.integer(any(amyloid_positive == 1L)), .groups = "drop")
+  summarise(amyloid_pet_pos = as.integer(any(centiloid >= 22.32)), .groups = "drop")
 ```
 
 # Table 1: Baseline participant characteristics stratified by MCI status
@@ -46,7 +55,6 @@ table1_data <- baseline_dat %>%
     caucasian = if_else(Ethnicity == "Caucasian", 1, 0),
     mci_status = factor(
       case_when(
-        #CONP_ID %in% dementia_ids ~ "Progressed to Dementia",
         CONP_ID %in% mci_ids      ~ "Progressed to MCI",
         TRUE                       ~ "Remained CU"
       ),
@@ -156,19 +164,19 @@ table1_gt <- table1_gtsummary %>%
     rows  = grouping == "Risk indicator burden"
   ) %>%
   tab_row_group(
-    label = md("**AD risk factors**"),
-    rows  = grouping == "AD risk factors"
-  ) %>%
-  tab_row_group(
     label = md("**AD risk indicators**"),
     rows  = grouping == "AD risk indicators"
+  ) %>%
+  tab_row_group(
+    label = md("**AD risk factors**"),
+    rows  = grouping == "AD risk factors"
   ) %>%
   tab_row_group(
     label = md("**Demographics**"),
     rows  = grouping == "Demographics"
   ) %>%
-  row_group_order(groups = c("**Demographics**", "**AD risk indicators**",
-                            "**AD risk factors**", "**Risk indicator burden**",
+  row_group_order(groups = c("**Demographics**", "**AD risk factors**",
+                            "**AD risk indicators**", "**Risk indicator burden**",
                             "**Baseline biomarkers**")) %>%
   tab_style(
     style     = list(cell_text(weight = "bold"),
